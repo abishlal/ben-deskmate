@@ -1,0 +1,3 @@
+# Keep Unix line endings: most files run inside Linux containers.
+* text=auto eol=lf
+*.webp binary

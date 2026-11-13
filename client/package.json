@@ -1,0 +1,14 @@
+{
+  "name": "desktop-pet-shell",
+  "version": "1.0.0",
+  "description": "Transparent always-on-top window that shows the pet page served by the Docker backend",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "selftest": "electron . --selftest"
+  },
+  "devDependencies": {
+    "electron": "^39.0.0"
+  }
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ben 3D preview</title>
+<style>
+  :root { --bg:#f3f1ec; --ink:#2a2723; --dim:#7a746b; --line:#ddd8cf; --card:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1d1c1a; --ink:#eeeae2; --dim:#9a948a; --line:#38352f; --card:#2a2826; } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 system-ui, sans-serif; }
+  #stage { width:100%; height:min(78vh, 640px); display:block; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:12px 16px 20px; }
+  button { font:inherit; padding:8px 14px; border-radius:999px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  button.on { border-color:#3f9b4a; color:#2f7d39; }
+  p { text-align:center; color:var(--dim); margin:0 16px 16px; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div class="bar" id="bar"></div>
+<p>Drag to turn him around. This is a preview only; the pet itself is unchanged.</p>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+<script type="module" src="./ben3d.js"></script>
+<script type="module">
+  import { createBen } from './ben3d.js';
+  const ben = createBen(document.getElementById('stage'), { orbit: true });
+  const states = ['idle', 'wave', 'listen', 'think', 'talk', 'quiet', 'sleep'];
+  const bar = document.getElementById('bar');
+  for (const s of states) {
+    const b = document.createElement('button');
+    b.textContent = s[0].toUpperCase() + s.slice(1);
+    b.onclick = () => { ben.setState(s); [...bar.children].forEach((x) => x.classList.toggle('on', x === b)); };
+    bar.appendChild(b);
+  }
+  bar.children[0].classList.add('on');
+  window.ben = ben;
+</script>
+</body>
+</html>

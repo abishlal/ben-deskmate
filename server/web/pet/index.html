@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desktop Pet</title>
+<link rel="stylesheet" href="pet.css">
+</head>
+<body>
+<div id="stage">
+  <div id="pet" class="sleep away" title="Click to talk · double-click to type">
+    <div id="rise">
+      <div id="bubble" hidden>
+        <div id="bubble-text"></div>
+        <form id="type-form" hidden><input id="type-box" placeholder="Type to me…" autocomplete="off"></form>
+      </div>
+      <div id="flip">
+        <svg id="sprite" viewBox="0 0 120 150" width="120" height="150" aria-hidden="true">
+          <ellipse class="shadow" cx="60" cy="144" rx="30" ry="5"/>
+          <g class="ring"><circle cx="60" cy="46" r="44"/></g>
+          <g class="body-group">
+            <!-- legs and sneakers -->
+            <g class="foot foot-l">
+              <rect class="jeans" x="44" y="108" width="14" height="28" rx="6"/>
+              <path class="shoe" d="M40 136 q0 -7 9 -7 h8 q5 0 5 6 v3 q0 3 -3 3 h-16 q-3 0 -3 -3 z"/>
+              <rect class="sole" x="40" y="139" width="22" height="3.5" rx="1.75"/>
+            </g>
+            <g class="foot foot-r">
+              <rect class="jeans" x="62" y="108" width="14" height="28" rx="6"/>
+              <path class="shoe" d="M58 136 q0 -6 5 -6 h8 q9 0 9 7 v2 q0 3 -3 3 h-16 q-3 0 -3 -3 z"/>
+              <rect class="sole" x="58" y="139" width="22" height="3.5" rx="1.75"/>
+            </g>
+            <!-- arms behind the torso -->
+            <g class="arm arm-l"><rect class="sleeve" x="27" y="80" width="13" height="30" rx="6.5"/><circle class="skin" cx="33.5" cy="112" r="6"/></g>
+            <g class="arm arm-r"><rect class="sleeve" x="80" y="80" width="13" height="30" rx="6.5"/><circle class="skin" cx="86.5" cy="112" r="6"/></g>
+            <!-- hoodie -->
+            <path class="hoodie" d="M38 88 q0 -12 12 -12 h20 q12 0 12 12 v24 q0 6 -6 6 h-32 q-6 0 -6 -6 z"/>
+            <path class="hood" d="M44 79 q16 12 32 0 q-3 9 -16 9 q-13 0 -16 -9 z"/>
+            <path class="pocket" d="M48 104 h24 l3 10 h-30 z"/>
+            <path class="string" d="M55 86 v9 M65 86 v9"/>
+            <!-- headphones resting on the neck -->
+            <path class="phones-band" d="M43 76 q17 12 34 0"/>
+            <rect class="phones-cup" x="38" y="70" width="9" height="12" rx="4"/>
+            <rect class="phones-cup" x="73" y="70" width="9" height="12" rx="4"/>
+            <!-- head -->
+            <g class="head">
+              <circle class="skin" cx="30" cy="48" r="5.5"/><circle class="skin" cx="90" cy="48" r="5.5"/>
+              <path class="skin face" d="M31 44 q0 -27 29 -27 q29 0 29 27 q0 30 -29 30 q-29 0 -29 -30 z"/>
+              <path class="hair" d="M29 44 q-3 -31 29 -32 q10 -6 21 0 q14 6 12 31 q-4 -12 -12 -16 q-13 6 -31 3 q-12 2 -19 14 z"/>
+              <path class="hair-shine" d="M52 16 q12 -5 24 0"/>
+              <path class="brow" d="M40 41 q6 -4 12 -1 M68 40 q6 -3 12 1"/>
+              <g class="eyes">
+                <g class="eye"><ellipse cx="46" cy="50" rx="5" ry="6.5"/><circle class="glint" cx="47.8" cy="47.5" r="1.9"/></g>
+                <g class="eye"><ellipse cx="74" cy="50" rx="5" ry="6.5"/><circle class="glint" cx="75.8" cy="47.5" r="1.9"/></g>
+              </g>
+              <g class="closed-eyes"><path d="M41 51 q5 4 10 0"/><path d="M69 51 q5 4 10 0"/></g>
+              <ellipse class="cheek" cx="38" cy="59" rx="5" ry="3"/>
+              <ellipse class="cheek" cx="82" cy="59" rx="5" ry="3"/>
+              <path class="smile" d="M52 62 q8 7 16 0"/>
+              <ellipse class="mouth" cx="60" cy="64" rx="5.5" ry="1.6"/>
+            </g>
+          </g>
+          <g class="dots"><circle cx="46" cy="5" r="4"/><circle cx="60" cy="5" r="4"/><circle cx="74" cy="5" r="4"/></g>
+          <text class="zzz" x="94" y="16">z</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="pet.js"></script>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+<script type="module" src="pet3d.js"></script>
+</body>
+</html>

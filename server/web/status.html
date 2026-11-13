@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pet status</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f4ef; --card:#fff; --ink:#22201c; --dim:#77726a; --accent:#e8743b;
+          --line:#e2ded5; --good:#2f8f5b; --bad:#c2412d; --warn:#b7791f; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1a18; --card:#262421; --ink:#eeeae2; --dim:#9a948a; --line:#38352f;
+          --good:#5cc08a; --bad:#ec7a63; --warn:#e0b04f; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { max-width:1040px; margin:0 auto; padding:18px 16px 4px; display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:20px; margin:0; }
+  header span { color:var(--dim); }
+  header a { margin-left:auto; color:var(--accent); }
+  main { max-width:1040px; margin:0 auto; padding:12px 16px 32px; display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; min-width:0; }
+  section.wide { grid-column:1 / -1; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 8px; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:5px 0; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:0; }
+  .row span:first-child { color:var(--dim); }
+  .row span:last-child { text-align:right; overflow-wrap:anywhere; }
+  .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:currentColor; margin-right:6px; vertical-align:1px; }
+  .bars { display:flex; align-items:flex-end; gap:4px; height:130px; margin-top:8px; overflow:hidden; }
+  .bar { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; height:100%; justify-content:flex-end; }
+  .bar div { width:100%; max-width:34px; background:var(--accent); border-radius:4px 4px 0 0; min-height:2px; }
+  .bar small { color:var(--dim); font-size:11px; line-height:1.2; text-align:center; overflow:hidden; max-width:100%; }
+  .big { font-size:26px; font-weight:600; }
+  .muted { color:var(--dim); }
+  ul { margin:0; padding:0; list-style:none; }
+  li { padding:4px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  li:last-child { border-bottom:0; }
+</style>
+</head>
+<body>
+<header><h1 id="title">Status</h1><span id="time">Loading…</span><a href="/">Chat and lists</a></header>
+<main>
+  <section><h2>Health</h2><div id="health"></div></section>
+  <section><h2>Microphone and pet</h2><div id="pet"></div></section>
+  <section><h2>Outlook and OneNote</h2><div id="bridge"></div></section>
+  <section><h2>Right now</h2><div id="now"></div></section>
+  <section class="wide"><h2>Usage, last 14 days</h2>
+    <div class="row"><span>Today</span><span id="today"></span></div>
+    <div class="bars" id="bars"></div>
+    <p class="muted" style="margin:8px 0 0;font-size:12px">Cost is the API-equivalent estimate the Claude CLI reports; a Claude subscription is not billed per turn.</p>
+  </section>
+  <section><h2>Settings</h2><div id="settings"></div></section>
+  <section><h2>Heard while waiting for the wake word</h2><ul id="heard"></ul></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const flag = (ok, yes = 'yes', no = 'no', warn = false) =>
+  `<span class="${ok ? 'good' : warn ? 'warn' : 'bad'}"><span class="dot"></span>${ok ? yes : no}</span>`;
+const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const rows = (pairs) => pairs.map(([k, v]) => `<div class="row"><span>${esc(k)}</span><span>${v}</span></div>`).join('');
+const ago = (s) => s == null ? 'never' : s < 90 ? `${s} s ago` : `${Math.round(s / 60)} min ago`;
+
+function render(d) {
+  $('title').textContent = `${d.name} status`;
+  $('time').textContent = d.time;
+  $('health').innerHTML = rows([
+    ['Voice service', flag(d.voice.up, 'running', 'down')],
+    ['Wake-word detector', flag(d.voice.wake_engine, 'loaded', 'missing')],
+    ['Claude login', flag(d.claude.logged_in, 'token present', 'not logged in')],
+    ['Model', esc(d.claude.model) + ' · effort ' + esc(d.claude.effort)],
+    ['Scheduler', flag(d.scheduler_tick_s_ago != null && d.scheduler_tick_s_ago < 60, ago(d.scheduler_tick_s_ago), ago(d.scheduler_tick_s_ago))],
+    ['Waiting to be said', esc(d.waiting_announcements)],
+    ['Pending reminders', esc(d.pending_reminders)],
+    ['Work log lines waiting for OneNote', d.worklog_waiting ? flag(false, '', esc(d.worklog_waiting), true) : '0'],
+    ['Memory', `${esc(d.memory.facts)} facts · ${esc(d.memory.day_summaries)} day summaries · ${esc(d.memory.history_search)} search`],
+  ]);
+  const p = d.pets[0];
+  $('pet').innerHTML = p ? rows([
+    ['Pet connected', flag(true) + (d.pets.length > 1 ? ` (${d.pets.length})` : '')],
+    ['Microphone', flag(p.mic, `live, level ${p.mic_level}`, 'not receiving audio')],
+    ['Microphone reopened', esc(p.mic_reopens) + ' times'],
+    ['Wake word', flag(p.wake_word, 'on', 'off', true)],
+    ['Paused', p.paused ? flag(false, '', 'paused', true) : 'no'],
+    ['On a call (mic used by another app)', p.in_call ? flag(false, '', 'yes, quiet', true) : 'no'],
+    ['In a calendar meeting', p.in_meeting ? flag(false, '', 'yes, quiet', true) : 'no'],
+    ['Voice muted', p.muted ? 'yes' : 'no'],
+    ['Dictating', p.dictating ? 'yes' : 'no'],
+    ['State', esc(p.mode) + (p.present ? ', on screen' : ', hidden')],
+    ['Last report', esc(p.at)],
+  ]) : rows([['Pet connected', flag(false, '', 'no pet window is connected')]]);
+  const b = d.bridge, apps = b.last_calls || {};
+  const app = (key, label) => {
+    const a = apps[key];
+    return [label, a ? flag(a.ok, `ok · ${esc(a.at)}`, `failed · ${esc(a.at)}: ${esc(a.error)}`) : '<span class="muted">not used yet</span>'];
+  };
+  $('bridge').innerHTML = rows([
+    ['Desktop bridge', flag(b.connected, 'connected', 'not connected')],
+    ['Can reach', ['tasks', 'notes', 'calendar'].filter((k) => b.can_reach && b.can_reach[k]).join(', ') || '<span class="bad">nothing</span>'],
+    app('outlook_tasks', 'Microsoft To Do (Outlook)'), app('onenote', 'OneNote'), app('calendar', 'Calendar'),
+    ['Calendar read', ago(d.calendar_checked_s_ago)],
+    ['Todos / notes live in', esc(d.mode.todos) + ' / ' + esc(d.mode.notes)],
+  ]);
+  $('now').innerHTML = rows([
+    ['Focus time', d.focus ? `until ${esc(d.focus.until)}${d.focus.label ? ' · ' + esc(d.focus.label) : ''}` : 'off'],
+    ['Meeting now', d.meeting_now ? esc(d.meeting_now) : 'none'],
+    ['Holding back messages', d.held_back ? flag(false, '', esc(d.held_back), true) : 'no'],
+    ['Last keyboard or mouse input', d.user_idle_s == null ? 'unknown' : ago(Math.round(d.user_idle_s))],
+    ['Working without a break', d.working_for_min == null ? '—' : `${d.working_for_min} min`],
+  ]);
+  const u = d.usage;
+  $('today').innerHTML = `<span class="big">${u.today.turns}</span> <span class="muted">of ${u.limit} turns · $${u.today.cost.toFixed(2)}</span>`;
+  const days = [];
+  const today = new Date(u.today.day + 'T12:00:00Z');          // the server's date, not this browser's
+  for (let i = 13; i >= 0; i--) {
+    const day = new Date(today.getTime() - i * 86400000);
+    const key = day.toISOString().slice(0, 10);
+    const found = u.days.find((x) => x.day === key) || { turns: 0, cost: 0 };
+    days.push({ label: `${day.getUTCDate()}<br>${day.toLocaleDateString('en', { weekday: 'narrow', timeZone: 'UTC' })}`, key, ...found });
+  }
+  const max = Math.max(1, ...days.map((x) => x.turns));
+  $('bars').innerHTML = days.map((x) => `<div class="bar" title="${x.key}: ${x.turns} turns, $${x.cost.toFixed(2)}">
+      <small>${x.turns || ''}</small><div style="height:${Math.round(x.turns / max * 70)}%"></div><small>${x.label}</small></div>`).join('');
+  $('settings').innerHTML = rows(Object.entries(d.settings).map(([k, v]) => [k.replaceAll('_', ' '), esc(v || '—')]));
+  $('heard').innerHTML = d.heard.length ? d.heard.slice().reverse().map((h) =>
+    `<li><span class="${h.woke ? 'good' : 'muted'}">${esc(h.at)}</span> ${esc(h.heard)}</li>`).join('') : '<li class="muted">Nothing yet</li>';
+}
+
+async function refresh() {
+  try { render(await (await fetch('/api/status')).json()); }
+  catch { $('time').textContent = 'The server is not answering.'; }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

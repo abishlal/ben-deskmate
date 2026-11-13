@@ -1,0 +1,9 @@
+﻿.env
+data/
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+client/out/
+client/dist/
+client/selftest*.png

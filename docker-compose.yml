@@ -1,0 +1,66 @@
+name: desktop-pet
+
+# The whole backend runs here. Nothing is installed or stored on the host:
+#   - data and Claude login state live in named volumes, no host folders are mounted
+#   - the voice container has no internet access and no published port
+#   - the server is reachable only from this machine (127.0.0.1)
+#   - both containers run as a non-root user on a read-only filesystem with all capabilities dropped
+#   - its own networks and volumes; it shares nothing with other compose projects on this machine
+
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 256
+  tmpfs:
+    - /tmp
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  voice:
+    <<: *hardening
+    build:
+      context: ./voice
+      args:
+        STT_MODEL: ${STT_MODEL:-small.en}
+        TTS_VOICE: ${TTS_VOICE:-en_US-amy-medium}
+        WAKE_MODEL: ${WAKE_MODEL:-hey_jarvis}
+    environment:
+      WAKE_THRESHOLD: ${WAKE_THRESHOLD:-0.5}
+      VOICE_THREADS: ${VOICE_THREADS:-6}
+      # Leave empty. A hint containing the wake phrase makes the recogniser "hear" it in unclear background speech.
+      STT_HINT: ${STT_HINT:-}
+    networks: [internal]
+    mem_limit: 3g
+
+  server:
+    <<: *hardening
+    build: ./server
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PET_VOICE_URL: http://voice:8766
+      PET_DATA_DIR: /data
+      HOME: /data/home
+      TZ: ${TZ:-Asia/Kolkata}
+    volumes:
+      - pet-data:/data
+    networks: [internal, egress]
+    ports:
+      - "127.0.0.1:${PET_PORT:-47821}:8765"
+    depends_on:
+      voice:
+        condition: service_started
+    mem_limit: 2g
+
+networks:
+  internal:
+    internal: true   # no route to the internet or the host
+  egress: {}         # server only: needed to reach the Claude API
+
+volumes:
+  pet-data:

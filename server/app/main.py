@@ -11,11 +11,11 @@ from contextlib import asynccontextmanager, suppress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, hub, msgraph, planner, prefs, scheduler, tools, voice, worklog
+from . import config, db, hub, msgraph, planner, prefs, rephrase, scheduler, tools, voice, worklog
 from .agent import DailyLimitReached, NotLoggedIn, assistant, logged_in
 
 log = logging.getLogger("pet")
@@ -124,6 +124,41 @@ async def heard() -> dict:
 async def history(limit: int = 60) -> dict:
     found = db.rows("SELECT ts, role, text FROM messages ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),))
     return {"messages": [{"when": db.fmt(m["ts"]), "role": m["role"], "text": m["text"]} for m in found[::-1]]}
+
+
+@app.get("/api/writing")
+async def writing() -> dict:
+    """The tone used for Ctrl+Alt+R rewrites, and the last few rewrites (kept in memory only)."""
+    return {"style": prefs.get("writing_style"), "samples": rephrase.samples(), "recent": list(rephrase.recent)[::-1]}
+
+
+@app.put("/api/writing")
+async def save_writing(request: Request) -> dict:
+    # Any web page can send requests to localhost: only our own pages may change settings.
+    if request.headers.get("origin") not in config.ALLOWED_ORIGINS or "json" not in request.headers.get("content-type", ""):
+        raise HTTPException(403, "Not allowed.")
+    data = await request.json()
+    try:
+        style = prefs.put("writing_style", str(data.get("style", "")))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    found = data.get("samples", [])
+    return {"style": style, "samples": rephrase.set_samples(found if isinstance(found, list) else [])}
+
+
+async def handle_rephrase(ws: WebSocket, rid: str, text: str) -> None:
+    """Ctrl+Alt+R: rewrite the selected text in the user's tone. Silent; the shell pastes the result."""
+    try:
+        result = await rephrase.rephrase(text)
+    except ValueError as e:
+        await hub.send(ws, {"type": "rephrased", "id": rid, "error": str(e)})
+    except Exception as e:
+        log.warning("rephrase failed: %s", e)
+        limit = "limit" in str(e).lower()
+        await hub.send(ws, {"type": "rephrased", "id": rid, "error": "I've reached my limit for today." if limit
+                            else "I couldn't rephrase that just now. Try again in a moment."})
+    else:
+        await hub.send(ws, {"type": "rephrased", "id": rid, "text": result})
 
 
 @app.get("/")
@@ -421,6 +456,8 @@ async def websocket(ws: WebSocket) -> None:
                     await begin_capture(ws, conn, AUTO_TASK, auto=True)
                 else:
                     await begin_capture(ws, conn, str(data.get("task") or CAPTURE_DEFAULT_TASK)[:200])
+            elif kind == "rephrase":   # runs beside a conversation and never cancels it
+                asyncio.create_task(handle_rephrase(ws, str(data.get("id", ""))[:40], str(data.get("text", ""))))
             elif kind == "capture_stop":
                 asyncio.create_task(stop_capture(ws, conn))
             elif kind == "capture_cancel" and conn.get("capture"):

@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('petShell', {
   typeText: (text) => ipcRenderer.send('pet:type-text', String(text)),
   // Puts a summary or rewrite on the clipboard.
   copyText: (text) => ipcRenderer.send('pet:copy-text', String(text)),
+  // The rewrite of the selected text (Ctrl+Alt+R), or why there is none; the shell pastes it over the selection.
+  rephraseResult: (id, text, error) => ipcRenderer.send('pet:rephrase-result', String(id), String(text || ''), String(error || '')),
   ready: (settings) => ipcRenderer.send('pet:ready', settings),
   onCommand: (handler) => ipcRenderer.on('pet:command', (_event, name, value) => handler(name, value)),
 });

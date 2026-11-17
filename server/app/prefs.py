@@ -23,6 +23,7 @@ DEFAULTS = {
     "meeting_quiet_enabled": os.getenv("PET_MEETING_QUIET", "on"),
     "break_every_minutes": os.getenv("PET_BREAK_EVERY_MINUTES", "0"),
     "stale_task_days": os.getenv("PET_STALE_TASK_DAYS", "14"),
+    "writing_style": "",
 }
 DESCRIPTIONS = {
     "briefing_enabled": "morning briefing on or off",
@@ -40,6 +41,8 @@ DESCRIPTIONS = {
     "meeting_quiet_enabled": "stay silent and stop listening for the wake word during meetings on the calendar, on or off",
     "break_every_minutes": "suggest a stretch break after this many minutes of continuous work; 0 turns it off",
     "stale_task_days": "a task open longer than this many days counts as stale in task reviews",
+    "writing_style": "how the user describes their own writing tone, used when rephrasing selected text (Ctrl+Alt+R); "
+                     "free text, for example 'direct and polite, a bit informal with my team'",
 }
 
 
@@ -63,6 +66,9 @@ def put(key: str, value: str) -> str:
     elif key.endswith("_days"):
         if not value.isdigit() or not 1 <= int(value) <= 365:
             raise ValueError("Use a whole number of days from 1 to 365.")
+    elif key == "writing_style":
+        if len(value) > 1000:
+            raise ValueError("Keep the style description under 1000 characters.")
     elif key.endswith("_enabled"):
         if value.lower() not in ("on", "off"):
             raise ValueError("Use on or off.")

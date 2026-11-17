@@ -26,6 +26,14 @@
   li { padding:6px 0; border-bottom:1px solid var(--line); }
   li small { display:block; color:var(--dim); }
   #status { color:var(--dim); font-size:13px; }
+  #side { overflow:auto; }
+  details { margin-bottom:16px; }
+  summary { cursor:pointer; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin-bottom:6px; }
+  textarea { width:100%; padding:8px 10px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:13px/1.4 system-ui, sans-serif; resize:vertical; margin-bottom:6px; }
+  .hint { color:var(--dim); font-size:12px; margin:0 0 6px; }
+  #writing-save { padding:6px 12px; font-size:13px; }
+  #writing-msg { color:var(--dim); font-size:12px; margin-left:6px; }
+  .rewrite small { white-space:pre-wrap; }
 </style>
 </head>
 <body>
@@ -35,9 +43,17 @@
     <div id="log"></div>
     <form id="form"><input id="box" placeholder="Type a message" autocomplete="off" autofocus><button>Send</button></form>
   </section>
-  <section>
+  <section id="side">
     <h2>Reminders</h2><ul id="reminders"></ul>
     <h2>Todos</h2><ul id="todos"></ul>
+    <details id="writing">
+      <summary>My writing style</summary>
+      <p class="hint">Used when you select text and press Ctrl+Alt+R. Describe how you write, and paste a few things you wrote yourself and are happy with.</p>
+      <textarea id="style" rows="3" maxlength="1000" placeholder="e.g. Direct and polite. A bit informal with my team, more formal with clients. Short sentences, no fluff."></textarea>
+      <div id="samples"></div>
+      <button id="writing-save" type="button">Save</button><span id="writing-msg"></span>
+      <h2 style="margin-top:14px">Recent rewrites</h2><ul id="rewrites"></ul>
+    </details>
   </section>
 </main>
 <script>
@@ -99,6 +115,35 @@ async function loadHistory() {
     add(m.role === 'user' ? 'me' : (m.role === 'pet' || m.role === 'result') ? 'pet' : 'note', m.role === 'announce' ? `${m.when.slice(-5)} · ${m.text}` : m.text);
   }
 }
+
+// ---- writing style for Ctrl+Alt+R ----
+const SAMPLE_SLOTS = 5;
+async function loadWriting() {
+  const data = await (await fetch('/api/writing')).json();
+  document.getElementById('style').value = data.style || '';
+  const box = document.getElementById('samples'); box.replaceChildren();
+  for (let i = 0; i < SAMPLE_SLOTS; i++) {
+    const t = document.createElement('textarea');
+    t.rows = 3; t.maxLength = 2000; t.placeholder = `Sample ${i + 1} of your own writing`; t.value = data.samples[i] || '';
+    box.append(t);
+  }
+  const ul = document.getElementById('rewrites'); ul.replaceChildren();
+  if (!data.recent.length) { const li = document.createElement('li'); li.textContent = 'None since the server started'; ul.append(li); }
+  for (const r of data.recent) {
+    const li = document.createElement('li'); li.className = 'rewrite'; li.textContent = r.result;
+    const small = document.createElement('small'); small.textContent = `${r.at} · was: ${r.original}`; li.append(small); ul.append(li);
+  }
+}
+document.getElementById('writing').addEventListener('toggle', (e) => { if (e.target.open) loadWriting().catch(() => {}); });
+document.getElementById('writing-save').onclick = async () => {
+  const msg = document.getElementById('writing-msg');
+  const samples = [...document.querySelectorAll('#samples textarea')].map(t => t.value.trim()).filter(Boolean);
+  const res = await fetch('/api/writing', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ style: document.getElementById('style').value, samples }) });
+  msg.textContent = res.ok ? 'Saved' : ((await res.json().catch(() => ({}))).detail || 'Could not save');
+  if (res.ok) loadWriting().catch(() => {});
+  setTimeout(() => { msg.textContent = ''; }, 3000);
+};
 
 loadHistory().catch(() => {}).then(connect); refresh(); setInterval(refresh, 30000);
 </script>

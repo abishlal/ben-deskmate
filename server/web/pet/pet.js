@@ -643,6 +643,7 @@
         case 'type_text':     // "paste it"
           if (shell && shell.typeText) shell.typeText(m.text);
           break;
+        case 'rephrased': endRephrase(m); break;   // the rewrite of the selected text, or why there is none
         case 'dictation':
           if (!m.text) break;
           if (shell && shell.typeText) shell.typeText(m.text + ' ');
@@ -662,6 +663,46 @@
         case 'error': turnDone = true; stopSpeaking(); arrive(); say(m.message, 8000); setMode('ambient'); leaveSoon(9000); break;
       }
     };
+  }
+
+  // ---------------------------------------------------------------- rephrase (Ctrl+Alt+R)
+  // The shell copies the selected text and pastes the rewrite over it; here the text goes to the server and Ben
+  // shows he is on it. He never speaks for this, so it works the same during calls, meetings and a pause.
+  let rephraseId = null, rephraseOwnsMode = false;
+  const REPHRASE_STATUS = {
+    empty: ['Select some text first, then press the keys again.', 4000],
+    keys: ['Let go of the keys and try again.', 3000],
+    long: ["That's too long for one go. Select under 5000 characters.", 5000],
+    failed: ["I couldn't copy the selection from that app.", 5000],
+    busy: ['Still working on the last one.', 2500],
+    clipboard: ['You switched windows, so the rewrite is on your clipboard. Press Ctrl+V.', 7000],
+  };
+  function rephraseSay(text, ms) {
+    arrive(); say(text, ms);
+    if (mode === 'ambient') leaveSoon(ms + 500);
+  }
+  function startRephrase(job) {
+    if (!job || !job.id) return;
+    if (!connected || !ws || ws.readyState !== 1) {
+      shell && shell.rephraseResult(job.id, '', 'offline');
+      rephraseSay("I'm not connected to my server, so I can't rephrase right now.", 5000);
+      return;
+    }
+    rephraseId = job.id;
+    rephraseOwnsMode = mode === 'ambient' || mode === 'sleep';
+    arrive();
+    if (rephraseOwnsMode) setMode('think');
+    say('Rephrasing…');
+    ws.send(JSON.stringify({ type: 'rephrase', id: job.id, text: String(job.text || '') }));
+  }
+  function endRephrase(m) {
+    shell && shell.rephraseResult(m.id, m.text || '', m.error || '');
+    if (m.id !== rephraseId) return;
+    rephraseId = null;
+    if (rephraseOwnsMode && mode === 'think') setMode('ambient');
+    rephraseOwnsMode = false;
+    if (m.error) rephraseSay(m.error, 6000);
+    else rephraseSay('Done.', 1500);
   }
 
   // ---------------------------------------------------------------- input wiring
@@ -685,6 +726,8 @@
       else if (cmd === 'incall') setInCall(!!value);
       else if (cmd === 'dictate') toggleDictation();
       else if (cmd === 'capture') toggleCapture();
+      else if (cmd === 'rephrase') startRephrase(value);
+      else if (cmd === 'rephrase-status') { const [text, ms] = REPHRASE_STATUS[value] || REPHRASE_STATUS.failed; rephraseSay(text, ms); }
       else if (cmd === 'idle') idleS = Number(value);
       else if (cmd === 'mic-reset') { micReopens++; openMic(); }
       else if (cmd === 'hotkey') talkKey = String(value);

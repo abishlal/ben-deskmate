@@ -60,6 +60,7 @@ The pet stays out of sight. It comes up when you call it or when it has a remind
 | Send it away | Say "stop", "never mind", "that's all" or "thanks" instead of a request. It leaves without asking Claude. |
 | Dictate | Ctrl+Alt+D (or tray menu → Dictate). What you say is typed where your cursor is, in any app, sentence by sentence. Press again to stop; it also stops after 12 seconds of silence. It pastes through the clipboard and puts your clipboard back afterwards. |
 | Summarise or rephrase | Say "Hey Jarvis, summarise this" (or "rephrase this as a formal email", "turn this into bullet points"), or press Ctrl+Alt+S. A chime means it is listening: talk as long as you like, pauses are fine. Say "stop" (or "that's it", "I'm done", "Hey Jarvis") as a sentence on its own to finish; "cancel that" throws it away. It speaks a short version, puts the full text on your clipboard and the chat page, then listens for "paste it", "make it shorter" or "save it as a note". It also finishes after two minutes of silence or fifteen minutes in all. One Claude turn per session; the listening itself is local. |
+| Rephrase selected text | Select text in any app and press Ctrl+Alt+R. It is rewritten in your tone (simple, professional, not AI-sounding) and pasted over the selection in 2 to 4 seconds; Ctrl+Z in that app brings your original back. Select the rewrite and press Ctrl+Alt+R again for a different version. It never speaks, so it works during calls and meetings. Set your tone on the chat page under My writing style: a short description plus a few samples of your own writing. If you switch windows while it works, the rewrite is left on your clipboard instead. Up to 5000 characters, pasted as plain text (bold and colours in the selection are lost). One Claude request each, outside the conversation; neither text is saved to the chat history. |
 | Snooze | Right after a reminder or alert: "snooze that", "remind me again in ten minutes". |
 | Type | Tray menu → Type a message, or double-click the pet while it is up. |
 | Pause it | Ctrl+Alt+P, or tray menu → Pause. It stops listening for the wake word and stops speaking; reminders still appear as a bubble and a Windows notification. Press again to resume. |
@@ -153,6 +154,7 @@ docker compose exec server python tests/wake_check.py      # wake word end to en
 docker compose exec server python tests/ms_fake_check.py   # To Do and OneNote tools against a fake Graph; no sign-in needed
 docker compose exec -e PET_DATA_DIR=/tmp/planner-check server python tests/planner_check.py   # planning features, throwaway database
 docker compose exec -e PET_DATA_DIR=/tmp/worklog-check server python tests/worklog_check.py   # work log and memory, fake OneNote
+docker compose exec -e PET_DATA_DIR=/tmp/rephrase-check server python tests/rephrase_check.py   # Ctrl+Alt+R rewrites, no Claude needed
 docker compose exec server python tests/smoke.py           # two real conversation turns and a reminder (uses Claude)
 docker compose logs -f server
 ```

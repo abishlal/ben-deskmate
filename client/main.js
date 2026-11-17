@@ -33,6 +33,7 @@ const HOTKEY = readSetting('PET_HOTKEY_TALK', KEY, 'Control+Alt+J');
 const PAUSE_HOTKEY = readSetting('PET_HOTKEY_PAUSE', KEY, 'Control+Alt+P');
 const DICTATE_HOTKEY = readSetting('PET_HOTKEY_DICTATE', KEY, 'Control+Alt+D');
 const CAPTURE_HOTKEY = readSetting('PET_HOTKEY_SUMMARISE', KEY, 'Control+Alt+S');
+const REPHRASE_HOTKEY = readSetting('PET_HOTKEY_REPHRASE', KEY, 'Control+Alt+R');
 const hotkeyOk = {};
 const keyLabel = (k) => hotkeyOk[k] === false ? 'shortcut taken by another app'
   : k.replace('Control', 'Ctrl').replace('CommandOrControl', 'Ctrl').replaceAll('+', ' + ');
@@ -117,6 +118,112 @@ function typeText(text) {
   }));
 }
 
+// ---- rephrase: Ctrl+Alt+R rewrites the selected text in your tone and pastes it over the selection ----
+// keys.ps1 runs the whole time (starting PowerShell for each use would add a second); it presses Ctrl+C and
+// Ctrl+V and reports which window is active. The clipboard is put back as it was after both.
+let keysProc = null, keysBuf = '';
+const keysWaiting = [];
+let keysQueue = Promise.resolve();
+
+function startKeys() {
+  if (keysProc && keysProc.exitCode === null && !keysProc.killed) return;
+  keysBuf = '';
+  keysProc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'keys.ps1')],
+    { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  keysWaiting.length = 0;
+  keysWaiting.push(() => {});   // its "ready" line
+  keysProc.stdout.setEncoding('utf8').on('data', (d) => {
+    keysBuf += d;
+    let nl;
+    while ((nl = keysBuf.indexOf('\n')) >= 0) {
+      const line = keysBuf.slice(0, nl).replace(/^﻿/, '').trim(); keysBuf = keysBuf.slice(nl + 1);
+      if (!line) continue;
+      let res; try { res = JSON.parse(line); } catch { res = { ok: false, error: line.slice(0, 200) }; }
+      const waiter = keysWaiting.shift();
+      if (waiter) waiter(res);
+    }
+  });
+  keysProc.stderr.setEncoding('utf8').on('data', (d) => logLine('keys helper:', d.trim().slice(0, 300)));
+  keysProc.on('exit', (code) => {
+    logLine('keys helper ended', code);
+    while (keysWaiting.length) keysWaiting.shift()({ ok: false, error: 'helper ended' });
+    keysProc = null;
+  });
+  keysProc.on('error', (e) => logLine('keys helper failed to start:', e.message));
+}
+
+function keysCall(cmd) {
+  const run = keysQueue.then(() => new Promise((resolve) => {
+    startKeys();
+    let done = false;
+    const finish = (res) => { if (!done) { done = true; clearTimeout(timer); resolve(res); } };
+    // A late answer still takes its place in the queue, so later answers stay matched to their commands.
+    const timer = setTimeout(() => finish({ ok: false, error: 'timeout' }), 8000);
+    keysWaiting.push(finish);
+    try { keysProc.stdin.write(cmd + '\n'); } catch (e) { finish({ ok: false, error: String(e.message || e) }); }
+  }));
+  keysQueue = run.catch(() => {});
+  return run;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function saveClipboard() {
+  const image = clipboard.readImage(), text = clipboard.readText();
+  return () => { if (!image.isEmpty()) clipboard.writeImage(image); else clipboard.writeText(text); };
+}
+// Runs fn with the clipboard to itself: dictation and rephrasing never use it at the same time.
+function withClipboard(fn) {
+  const run = typeQueue.then(fn);
+  typeQueue = run.catch(() => {});
+  return run;
+}
+
+let rephrasing = null;   // { id, hwnd, at } while a rewrite is on its way
+
+async function rephraseSelection() {
+  if (rephrasing && Date.now() - rephrasing.at < 60000) { send('rephrase-status', 'busy'); return; }
+  rephrasing = { id: String(Date.now()), hwnd: null, at: Date.now() };
+  const mine = rephrasing;
+  const grabbed = await withClipboard(async () => {
+    const restore = saveClipboard();
+    clipboard.clear();
+    const res = await keysCall('grab');
+    let text = '';
+    if (res.ok) for (let i = 0; i < 20 && !text; i++) { await sleep(40); text = clipboard.readText(); }
+    restore();
+    return { ...res, text };
+  }).catch((e) => ({ ok: false, error: String(e) }));
+  if (rephrasing !== mine) return;
+  // Too long: refuse rather than paste a rewrite of only part of it over the whole selection.
+  const problem = !grabbed.ok ? (grabbed.error === 'keys' ? 'keys' : 'failed')
+    : !grabbed.text.trim() ? 'empty' : grabbed.text.length > 5000 ? 'long' : '';
+  if (problem) {
+    rephrasing = null;
+    if (problem === 'failed') logLine('rephrase: could not copy the selection:', grabbed.error);
+    send('rephrase-status', problem);
+    return;
+  }
+  mine.hwnd = grabbed.hwnd;
+  send('rephrase', { id: mine.id, text: grabbed.text });
+}
+
+async function pasteRephrase(id, text) {
+  const job = rephrasing;
+  if (!job || job.id !== id) return;
+  rephrasing = null;
+  const res = await withClipboard(async () => {
+    const restore = saveClipboard();
+    clipboard.writeText(text);
+    const r = await keysCall(`paste ${job.hwnd}`);
+    if (r.ok) { await sleep(500); restore(); }   // otherwise the rewrite stays on the clipboard for Ctrl+V
+    return r;
+  }).catch((e) => ({ ok: false, error: String(e) }));
+  if (!res.ok) {
+    send('rephrase-status', 'clipboard');
+    if (Notification.isSupported()) new Notification({ title: 'Rephrased', body: 'You switched windows, so it is on the clipboard. Press Ctrl+V to paste it.', silent: true }).show();
+  }
+}
+
 // Orange when listening, grey when paused or quiet during a call, so the state is visible at a glance.
 function trayIcon(dim = false) {
   const size = 32, buf = Buffer.alloc(size * size * 4);
@@ -151,7 +258,7 @@ function reassertWindow(reload) {
 
 function send(name, value) {
   if (!win || win.isDestroyed()) return;
-  if (['talk', 'dictate', 'capture'].includes(name)) { win.setAlwaysOnTop(true, 'screen-saver'); win.moveTop(); }
+  if (['talk', 'dictate', 'capture', 'rephrase'].includes(name)) { win.setAlwaysOnTop(true, 'screen-saver'); win.moveTop(); }
   win.webContents.send('pet:command', name, value);
 }
 
@@ -211,6 +318,7 @@ function buildMenu() {
     { label: 'Type a message', click: () => { win.focus(); send('type'); } },
     { label: `Dictate into the active app  (${keyLabel(DICTATE_HOTKEY)})`, click: () => send('dictate') },
     { label: `Listen, then summarise  (${keyLabel(CAPTURE_HOTKEY)})`, click: () => send('capture') },
+    { label: `Rephrase selected text: select it, then press ${keyLabel(REPHRASE_HOTKEY)}`, enabled: false },
     { type: 'separator' },
     { label: `Listen for the wake word ("${WAKE_PHRASE}")`, type: 'checkbox', checked: state.handsfree,
       click: (item) => { state.handsfree = item.checked; send('handsfree', item.checked); } },
@@ -287,9 +395,11 @@ else app.whenReady().then(() => {
   tray.on('click', () => send('talk'));
   buildMenu();
   for (const [key, action] of [[HOTKEY, () => send('talk')], [PAUSE_HOTKEY, () => togglePause()],
-    [DICTATE_HOTKEY, () => send('dictate')], [CAPTURE_HOTKEY, () => send('capture')]]) {
+    [DICTATE_HOTKEY, () => send('dictate')], [CAPTURE_HOTKEY, () => send('capture')],
+    [REPHRASE_HOTKEY, () => { rephraseSelection().catch((e) => logLine('rephrase failed:', e && e.stack || e)); }]]) {
     try { hotkeyOk[key] = globalShortcut.register(key, action); } catch { hotkeyOk[key] = false; }
   }
+  if (hotkeyOk[REPHRASE_HOTKEY]) startKeys();   // warm, so the first rephrase is as quick as the rest
   logLine('shortcuts:', Object.entries(hotkeyOk).map(([k, ok]) => `${k} ${ok ? 'ok' : 'TAKEN'}`).join(', '));
   buildMenu();
   // How long since the last keyboard or mouse input: the server waits for the user before briefings and wrap-ups,
@@ -339,6 +449,11 @@ else app.whenReady().then(() => {
   ipcMain.on('pet:type-text', (e, text) => {
     if (e.senderFrame && e.senderFrame.url.startsWith(ORIGIN + '/pet/')) typeText(text);
   });
+  ipcMain.on('pet:rephrase-result', (e, id, text, error) => {
+    if (!e.senderFrame || !e.senderFrame.url.startsWith(ORIGIN + '/pet/')) return;
+    if (error || !text) { if (rephrasing && rephrasing.id === id) rephrasing = null; return; }
+    pasteRephrase(String(id), String(text).slice(0, 20000)).catch((err) => logLine('rephrase paste failed:', err && err.stack || err));
+  });
   ipcMain.on('pet:notify', (_e, title, body) => { if (Notification.isSupported()) new Notification({ title, body, silent: true }).show(); });
   ipcMain.handle('pet:host-call', (e, op, args) => {
     if (!e.senderFrame || !e.senderFrame.url.startsWith(ORIGIN + '/pet/')) return { ok: false, error: 'Not allowed from this page.' };
@@ -376,5 +491,5 @@ else app.whenReady().then(() => {
   }, 6000);
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { globalShortcut.unregisterAll(); if (keysProc) keysProc.kill(); });
 app.on('window-all-closed', () => { quitReason = 'all windows closed'; app.quit(); });

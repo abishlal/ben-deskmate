@@ -84,9 +84,10 @@ def _app_of(op: str) -> str:
     return "onenote" if op.startswith("note") else "calendar" if op.startswith("calendar") else         "outlook_tasks" if op.startswith("task") else "bridge"
 
 
-def _record(op: str, ok: bool, error: str = "") -> None:
+def _record(op: str, ok: bool, error: str = "", started: float | None = None) -> None:
     from . import config
-    host_health[_app_of(op)] = {"ok": ok, "op": op, "at": config.now().strftime("%d %b %H:%M:%S"), "error": error[:200]}
+    ms = round((time.monotonic() - started) * 1000) if started else None
+    host_health[_app_of(op)] = {"ok": ok, "op": op, "at": config.now().strftime("%d %b %H:%M:%S"), "ms": ms, "error": error[:200]}
 
 
 class HostError(Exception):
@@ -100,23 +101,24 @@ async def host_call(op: str, args: dict, timeout: float = 60):
     if ws is None:
         raise HostError("The desktop pet is not running on the PC, so Outlook and OneNote cannot be reached right now.")
     call_id = uuid.uuid4().hex
+    started = time.monotonic()
     future = _pending[call_id] = asyncio.get_running_loop().create_future()
     try:
         if not await send(ws, {"type": "host_call", "id": call_id, "op": op, "args": args}):
             raise HostError("Lost the connection to the desktop pet.")
         result = await asyncio.wait_for(future, timeout)
     except asyncio.TimeoutError:
-        _record(op, False, "no answer in time")
+        _record(op, False, "no answer in time", started)
         raise HostError("The desktop app did not answer in time.") from None
     except HostError as e:
-        _record(op, False, str(e))
+        _record(op, False, str(e), started)
         raise
     finally:
         _pending.pop(call_id, None)
     if not result.get("ok"):
-        _record(op, False, str(result.get("error")))
+        _record(op, False, str(result.get("error")), started)
         raise HostError(str(result.get("error") or "The desktop app reported an error."))
-    _record(op, True)
+    _record(op, True, started=started)
     return result.get("data")
 
 

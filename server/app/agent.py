@@ -160,11 +160,19 @@ class Assistant:
             self._last_turn_ts = db.ts()
             parts: list[str] = []
             streamed = False
+            started = time.monotonic()
+            steps: list[str] = []   # timings for the log: when each tool call and the first words came
             try:
                 await client.query(f"[{stamp}] {text}")
                 async for msg in client.receive_response():
                     if isinstance(msg, StreamEvent):
                         ev = msg.event
+                        if ev.get("type") == "content_block_start":
+                            block = ev.get("content_block", {})
+                            if block.get("type") in ("tool_use", "server_tool_use"):
+                                steps.append(f"{block.get('name', '?').split('__')[-1]}@{time.monotonic() - started:.1f}s")
+                            elif block.get("type") == "text" and not parts:
+                                steps.append(f"text@{time.monotonic() - started:.1f}s")
                         if msg.parent_tool_use_id is None and ev.get("type") == "content_block_delta":
                             delta = ev.get("delta", {})
                             if delta.get("type") == "text_delta" and delta.get("text"):
@@ -187,6 +195,7 @@ class Assistant:
                             log.warning("turn ended with error: %s %s", msg.subtype, msg.result)
                             raise RuntimeError(msg.result or msg.subtype)
                         db.add_usage(msg.total_cost_usd or 0.0)
+                        log.info("turn took %.1fs: %s", time.monotonic() - started, ", ".join(steps) or "no steps")
             except asyncio.CancelledError:
                 await self._interrupt_quietly()
                 raise

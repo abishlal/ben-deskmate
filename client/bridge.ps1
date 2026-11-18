@@ -1,11 +1,13 @@
 # Desktop bridge: lets the pet work with Microsoft To Do (through classic Outlook's task folders)
-# and OneNote (desktop app) on this PC. It is started by the pet shell for one operation at a time.
+# and OneNote (desktop app) on this PC. The pet shell keeps one copy running and sends it one operation at a
+# time, which saves starting PowerShell (about a second) for every call.
 #
 # Scope is deliberately narrow: task items, OneNote pages, and the calendar (read events, add a personal
 # appointment). It never opens mail or contacts, never sends anything, never adds attendees, and refuses to
 # change or delete any Outlook item that is not a task.
 #
 # Usage:  powershell -NoProfile -File bridge.ps1 -Op <operation>     (arguments as JSON on standard input)
+#         powershell -NoProfile -File bridge.ps1 -Op serve           (one {"op":..,"args":..} JSON line in, one reply line out)
 param([Parameter(Mandatory)][string]$Op)
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +17,7 @@ $olTaskItem = 3; $olFolderTasks = 13; $olTaskClass = 48
 $olAppointmentItem = 1; $olFolderCalendar = 9; $olAppointmentClass = 26
 $NoDate = [datetime]'4501-01-01'
 
-function Out-Result($data) { [Console]::Out.Write((@{ ok = $true; data = $data } | ConvertTo-Json -Depth 6 -Compress)) }
+function Out-Result($data) { $script:Reply = @{ ok = $true; data = $data } | ConvertTo-Json -Depth 6 -Compress }
 function Iso($d) { if ($d -and $d -lt $NoDate.AddDays(-1)) { $d.ToString('yyyy-MM-ddTHH:mm:ss') } else { $null } }
 
 # ---------------------------------------------------------------- Outlook tasks (Microsoft To Do)
@@ -198,10 +200,7 @@ function Get-DefaultSectionId($on) {
 }
 
 # ---------------------------------------------------------------- operations
-try {
-    $raw = [Console]::In.ReadToEnd()
-    $a = if ($raw.Trim()) { $raw | ConvertFrom-Json } else { [pscustomobject]@{} }
-
+function Invoke-Op([string]$Op, $a) {
     switch ($Op) {
         'status' {
             # Cheap check that starts neither app.
@@ -382,6 +381,34 @@ try {
         }
         default { throw "Unknown operation '$Op'." }
     }
-} catch {
-    [Console]::Out.Write((@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress))
+}
+
+function Invoke-Request([string]$Op, [scriptblock]$getArgs) {
+    $script:Reply = $null
+    try {
+        $a = & $getArgs
+        if ($null -eq $a) { $a = [pscustomobject]@{} }
+        $null = Invoke-Op $Op $a
+        if (-not $script:Reply) { throw 'The bridge returned nothing.' }
+        return $script:Reply
+    } catch {
+        return (@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress)
+    } finally {
+        # Let go of Outlook and OneNote between calls, so a long-running bridge never keeps them open.
+        $script:Outlook = $null
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
+}
+
+if ($Op -ne 'serve') {
+    [Console]::Out.Write((Invoke-Request $Op { $raw = [Console]::In.ReadToEnd(); if ($raw.Trim()) { $raw | ConvertFrom-Json } }))
+    return
+}
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+    if (-not $line.Trim()) { continue }
+    try { $req = $line | ConvertFrom-Json } catch { $req = $null }
+    $reply = if ($req -and $req.op) { Invoke-Request ([string]$req.op) { $req.args } }
+             else { @{ ok = $false; error = 'Malformed request.' } | ConvertTo-Json -Compress }
+    [Console]::Out.Write($reply + "`n")
+    [Console]::Out.Flush()
 }

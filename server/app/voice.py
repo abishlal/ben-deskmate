@@ -103,11 +103,20 @@ async def speak(text: str) -> bytes | None:
         return None
 
 
-def split_sentences(buffer: str) -> tuple[list[str], str]:
-    """Complete sentences in the buffer, plus the unfinished remainder."""
+_CLAUSE_END = re.compile(r"(?<=[,;:])\s+")
+
+
+def split_sentences(buffer: str, first: bool = False) -> tuple[list[str], str]:
+    """Complete sentences in the buffer, plus the unfinished remainder.
+    first=True (nothing spoken yet): a long opening sentence is also cut after a clause, so speech starts sooner."""
     pieces = _SENTENCE_END.split(buffer)
     done = [p.strip() for p in pieces[:-1] if p.strip()]
-    return done, pieces[-1]
+    rest = pieces[-1]
+    if first and not done and len(rest) > 60:
+        cuts = [m.end() for m in _CLAUSE_END.finditer(rest) if m.start() >= 25]
+        if cuts:
+            done, rest = [rest[:cuts[0]].strip()], rest[cuts[0]:]
+    return done, rest
 
 
 _NAMES = "|".join(sorted({re.escape(w.split()[-1]) for w in config.WAKE_WORDS}, key=len, reverse=True))

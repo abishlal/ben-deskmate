@@ -102,7 +102,8 @@ async def stt(request: Request) -> dict:
         # Optional vocabulary hint. Never put the wake phrase in it: Whisper then invents it in unclear audio.
         segments, _ = _stt.transcribe(audio, language="en", beam_size=1, vad_filter=vad,
                                       vad_parameters={"threshold": 0.35, "min_speech_duration_ms": 150} if vad else None,
-                                      condition_on_previous_text=False, initial_prompt=STT_HINT or None)
+                                      condition_on_previous_text=False, initial_prompt=STT_HINT or None,
+                                      without_timestamps=True)   # only the text is used; saves ~0.3 s per request
         return " ".join(s.text.strip() for s in segments if s.no_speech_prob < 0.6).strip()
 
     def run() -> str:

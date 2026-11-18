@@ -26,10 +26,12 @@ const ORIGIN = `http://127.0.0.1:${readSetting('PET_PORT', '\\d+', '47821')}`;
 const PET_NAME = readSetting('PET_NAME', '[\\w -]{1,30}', 'Jarvis');
 // What you say to wake it; the wake-word model decides this, so it can differ from the name.
 const WAKE_PHRASE = readSetting('PET_WAKE_PHRASE', '[\\w ,-]{1,40}', 'Hey Jarvis');
-// Global shortcuts. Each can be changed in .env (e.g. PET_HOTKEY_TALK=Control+Alt+J). A shortcut another app
+// Global shortcuts. Each can be changed in .env (e.g. PET_HOTKEY_TALK=Control+Alt+B). A shortcut another app
 // already owns (Ctrl+Alt+Space belongs to the Claude app's quick entry) cannot be taken; the tray menu says so.
 const KEY = '[\\w+]{3,40}';
-const HOTKEY = readSetting('PET_HOTKEY_TALK', KEY, 'Control+Alt+J');
+const HOTKEY = readSetting('PET_HOTKEY_TALK', KEY, 'Control+Alt+B');
+// Stops whatever the pet is doing (talking, thinking, listening, dictating) and hides it at once.
+const DISMISS_HOTKEY = readSetting('PET_HOTKEY_DISMISS', KEY, 'Control+Alt+X');
 const PAUSE_HOTKEY = readSetting('PET_HOTKEY_PAUSE', KEY, 'Control+Alt+P');
 const DICTATE_HOTKEY = readSetting('PET_HOTKEY_DICTATE', KEY, 'Control+Alt+D');
 const CAPTURE_HOTKEY = readSetting('PET_HOTKEY_SUMMARISE', KEY, 'Control+Alt+S');
@@ -270,6 +272,12 @@ function reassertWindow(reload) {
   if (reload) { logLine('reloading the pet page after', reload); load(); }
 }
 
+// The dismiss hotkey: drop a rephrase still on its way (so nothing gets pasted) and tell the page to stop and hide.
+function dismiss() {
+  rephrasing = null;
+  send('dismiss');
+}
+
 function send(name, value) {
   if (!win || win.isDestroyed()) return;
   if (['talk', 'dictate', 'capture', 'rephrase'].includes(name)) { win.setAlwaysOnTop(true, 'screen-saver'); win.moveTop(); }
@@ -329,6 +337,7 @@ function buildMenu() {
       checked: state.autoPause, click: (item) => { state.autoPause = item.checked; applyQuiet(); } },
     { type: 'separator' },
     { label: `Talk  (${keyLabel(HOTKEY)})`, click: () => send('talk') },
+    { label: `Stop and hide  (${keyLabel(DISMISS_HOTKEY)})`, click: () => dismiss() },
     { label: 'Type a message', click: () => { win.focus(); send('type'); } },
     { label: `Dictate into the active app  (${keyLabel(DICTATE_HOTKEY)})`, click: () => send('dictate') },
     { label: `Listen, then summarise  (${keyLabel(CAPTURE_HOTKEY)})`, click: () => send('capture') },
@@ -408,7 +417,7 @@ else app.whenReady().then(() => {
   tray.setToolTip('Desktop Pet');
   tray.on('click', () => send('talk'));
   buildMenu();
-  for (const [key, action] of [[HOTKEY, () => send('talk')], [PAUSE_HOTKEY, () => togglePause()],
+  for (const [key, action] of [[HOTKEY, () => send('talk')], [DISMISS_HOTKEY, () => dismiss()], [PAUSE_HOTKEY, () => togglePause()],
     [DICTATE_HOTKEY, () => send('dictate')], [CAPTURE_HOTKEY, () => send('capture')],
     [REPHRASE_HOTKEY, () => { rephraseSelection().catch((e) => logLine('rephrase failed:', e && e.stack || e)); }]]) {
     try { hotkeyOk[key] = globalShortcut.register(key, action); } catch { hotkeyOk[key] = false; }

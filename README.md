@@ -6,7 +6,7 @@ It keeps your todo list and notes, sets reminders, speaks up when something is d
 ```
 Desktop shell (Electron, optional)        Docker: compose project "desktop-pet"
  transparent strip above the taskbar       ┌────────────────────────────────────────────┐
- tray menu, Ctrl+Alt+J, toasts         │ server  (FastAPI + Claude Agent SDK)       │
+ tray menu, Ctrl+Alt+B, toasts         │ server  (FastAPI + Claude Agent SDK)       │
         │ loads                            │   /pet/  the pet page (animation, mic, audio)
         ▼                                  │   /      chat page with reminders and todos │
  http://127.0.0.1:47821/pet/  ◄──────────► │   /ws    text, audio and events            │
@@ -54,10 +54,11 @@ The pet stays out of sight. It comes up when you call it or when it has a remind
 
 | Action | How |
 |---|---|
-| Call it | Say "Hey Jarvis", either on its own (it comes up and waits) or followed by your request: "Hey Jarvis, what's on my list?" Ctrl+Alt+J or the tray icon also calls it. |
+| Call it | Say "Hey Jarvis", either on its own (it comes up and waits) or followed by your request: "Hey Jarvis, what's on my list?" Ctrl+Alt+B or the tray icon also calls it. |
 | Follow up | After it answers it listens for about 7 seconds, so you can reply without the wake word ("and tomorrow?"). If you say nothing it leaves quietly. |
 | Interrupt | Say "Hey Jarvis" while it is talking or thinking: it stops and listens. The hotkey or a click also works. |
 | Send it away | Say "stop", "never mind", "that's all" or "thanks" instead of a request. It leaves without asking Claude. |
+| Stop and hide | Ctrl+Alt+X (or tray menu → Stop and hide). Whatever it is doing, talking, thinking, listening, dictating, a listening session or a rephrase, stops at once and it hides, even with Stay on screen on. Nothing is pasted or kept. |
 | Dictate | Ctrl+Alt+D (or tray menu → Dictate). What you say is typed where your cursor is, in any app, sentence by sentence. Press again to stop; it also stops after 12 seconds of silence. It pastes through the clipboard and puts your clipboard back afterwards. |
 | Summarise or rephrase | Say "Hey Jarvis, summarise this" (or "rephrase this as a formal email", "turn this into bullet points"), or press Ctrl+Alt+S. A chime means it is listening: talk as long as you like, pauses are fine. Say "stop" (or "that's it", "I'm done", "Hey Jarvis") as a sentence on its own to finish; "cancel that" throws it away. It speaks a short version, puts the full text on your clipboard and the chat page, then listens for "paste it", "make it shorter" or "save it as a note". It also finishes after two minutes of silence or fifteen minutes in all. One Claude turn per session; the listening itself is local. |
 | Rephrase selected text | Select text in any app and press Ctrl+Alt+R. It is rewritten in your tone (simple, professional, not AI-sounding) and pasted over the selection in 2 to 4 seconds; Ctrl+Z in that app brings your original back. Select the rewrite and press Ctrl+Alt+R again for a different version. It never speaks, so it works during calls and meetings. Set your tone on the chat page under My writing style: a short description plus a few samples of your own writing. If you switch windows while it works, the rewrite is left on your clipboard instead. Up to 5000 characters, pasted as plain text (bold and colours in the selection are lost). One Claude request each, outside the conversation; neither text is saved to the chat history. |

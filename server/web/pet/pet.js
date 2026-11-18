@@ -32,7 +32,7 @@
   let discard = false;           // a reply was interrupted: drop what is still arriving from it
   let dictating = false;         // dictation mode: speech is typed into the active app, not sent to the assistant
   let idleS = null;              // seconds since the last keyboard or mouse input (from the desktop shell)
-  let talkKey = 'the talk shortcut';   // e.g. "Ctrl + Alt + J", sent by the desktop shell
+  let talkKey = 'the talk shortcut';   // e.g. "Ctrl + Alt + B", sent by the desktop shell
   let quietHintAt = 0;
   let capturing = false;         // listening session: everything said until "stop" is collected, then summarised
   let captureStarted = 0;
@@ -555,6 +555,24 @@
     setMode('listen'); say('Listening…');
   }
 
+  /** The dismiss hotkey: stop whatever it is doing (talking, thinking, listening, dictating, a listening session,
+      a rephrase) and hide at once, even in "stay on screen" mode. Calling it again brings it back. */
+  function dismiss() {
+    clearTimeout(leaveTimer); clearTimeout(hideTimer);
+    interrupt(); followUp = false;
+    if (capturing) { capturing = false; if (connected) ws.send(JSON.stringify({ type: 'capture_cancel' })); }
+    dictating = false;
+    if (rephraseId) { shell && shell.rephraseResult(rephraseId, '', 'dismissed'); rephraseId = null; rephraseOwnsMode = false; }
+    resetVad();
+    typeForm.hidden = true; typeBox.value = '';
+    youText = replyText = ''; render();
+    setMode('ambient');
+    clearTimeout(leaveTimer);
+    if (held || flying || stunned) return;   // mid-air: he lands, then leaves on his own
+    present = false; paint();
+    shell && shell.setIgnoreMouse(true);
+  }
+
   function openTypeBox() {
     arrive(); interrupt(); followUp = false;
     if (mode === 'listen') setMode('ambient');
@@ -653,6 +671,7 @@
           youText = `${m.words} words so far`; replyText = `…${m.last}`; render();
           break;
         case 'capture_end':
+          if (m.cancelled && !capturing) break;   // thrown away by the dismiss hotkey: nothing to say
           capturing = false; resetVad();
           if (m.cancelled) { say('Okay, I threw that away.', 3000); setMode('ambient'); }
           else if (m.empty) { say("I didn't hear anything to work with.", 4000); setMode('ambient'); }
@@ -924,6 +943,7 @@
     addEventListener('mousemove', (e) => shell.setIgnoreMouse(!(held || present && e.target.closest && e.target.closest('#pet'))));
     shell.onCommand((cmd, value) => {
       if (cmd === 'talk') talk();
+      else if (cmd === 'dismiss') dismiss();
       else if (cmd === 'type') openTypeBox();
       else if (cmd === 'handsfree') setHandsfree(!!value);
       else if (cmd === 'mute') setMuted(!!value);
@@ -954,6 +974,6 @@
   window.__pet = {
     state: () => ({ screen: homeId, mode, connected, present, followUp, paused, inCall, inMeeting, dictating, capturing, wakeEngine, micReady, x: Math.round(x), y: Math.round(y), held, flying, stunned, cls: pet.className, bubble: bubble.hidden ? null : bubbleText.textContent }),
     fling: (sx, sy, fromY = 200) => { arrive(); setLift(true); held = true; y = fromY; samples = [{ t: performance.now() - 50, x, y }, { t: performance.now(), x: x + sx / 20, y: y + sy / 20 }]; release(); },
-    sendText, talk, setStay, arrive, setAnim, toggleDictation, toggleCapture, setMode, feed: onBlock,
+    sendText, talk, dismiss, setStay, arrive, setAnim, toggleDictation, toggleCapture, setMode, feed: onBlock,
   };
 })();

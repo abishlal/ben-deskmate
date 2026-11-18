@@ -166,8 +166,18 @@ async def index() -> FileResponse:
     return FileResponse(WEB / "index.html")
 
 
+class _Revalidated(StaticFiles):
+    """Static files the browser must check (a cheap 304 by ETag) before reusing, so a rebuilt server's page
+    reaches the desktop shell instead of an old copy from its cache."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # The pet's own page: loaded by the desktop shell, and usable in a browser tab for preview.
-app.mount("/pet", StaticFiles(directory=WEB / "pet", html=True), name="pet")
+app.mount("/pet", _Revalidated(directory=WEB / "pet", html=True), name="pet")
 
 
 def _speakable(text: str) -> str:

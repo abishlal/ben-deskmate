@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('petShell', {
   setIgnoreMouse: (ignore) => ipcRenderer.send('pet:ignore-mouse', !!ignore),
+  // Grow the window to the whole work area of a screen while the pet is held or flying (false: back to the strip).
+  lift: (on, displayId) => ipcRenderer.send('pet:lift', !!on, Number(displayId) || null),
   notify: (title, body) => ipcRenderer.send('pet:notify', String(title), String(body)),
   // Runs one allow-listed operation against Outlook tasks or OneNote; resolves to {ok, data} or {ok:false, error}.
   hostCall: (op, args) => ipcRenderer.invoke('pet:host-call', String(op), args || {}),

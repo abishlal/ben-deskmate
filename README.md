@@ -68,6 +68,7 @@ The pet stays out of sight. It comes up when you call it or when it has a remind
 | Meetings | While a meeting on your Outlook calendar is in progress (shown as busy), it also goes quiet, and holds back everything except reminders until the meeting ends. "Stop going quiet in meetings" turns this off. |
 | Status | Tray menu → Status and usage, or http://127.0.0.1:47821/status: microphone, wake word, desktop bridge and each app's last call, what is being held back, and turns and cost per day. |
 | Keep it visible | Tray menu → Stay on screen. It then wanders along the taskbar as before. |
+| Pick it up | Drag it to carry it anywhere, including onto another monitor; let go to drop it, or flick to throw it. It bounces off screen edges and lands on the taskbar of the screen it is over (dizzy after a hard landing), and stays on that screen. A plain click still calls it. |
 | Wake word off | Tray menu → Listen for the wake word. The microphone is then only used after the hotkey or a click. |
 | Mute voice | Tray menu → Mute voice. Replies still appear in the bubble. |
 | Start with Windows | Tray menu → Start with Windows. The containers restart on their own once Docker Desktop is running. |

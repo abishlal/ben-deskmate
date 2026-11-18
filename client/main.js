@@ -239,9 +239,23 @@ function trayIcon(dim = false) {
   return nativeImage.createFromBitmap(buf, { width: size, height: size });
 }
 
+// While you hold or throw the pet the window grows to the whole work area so he can fly above the strip;
+// it shrinks back once he has landed. The bottom edge stays put, so nothing on the page moves.
+// He can be carried or thrown onto another screen: the window then moves to that screen's work area, and his
+// strip stays on the screen he last landed on (homeId) until he is moved again.
+let lifted = false, homeId = null;
+function homeDisplay() { return screen.getAllDisplays().find((d) => d.id === homeId) || screen.getPrimaryDisplay(); }
 function placeWindow() {
-  const area = screen.getPrimaryDisplay().workArea;   // excludes the taskbar
-  win.setBounds({ x: area.x, y: area.y + area.height - STRIP_HEIGHT, width: area.width, height: STRIP_HEIGHT });
+  const display = homeDisplay(), area = display.workArea;   // excludes the taskbar
+  const height = lifted ? area.height : STRIP_HEIGHT;
+  const bounds = { x: area.x, y: area.y + area.height - height, width: area.width, height };
+  const moving = win.__displayId !== display.id;
+  win.setBounds(bounds);
+  // Moving onto a screen with a different scale can leave the size off by the ratio; the second call settles it.
+  if (moving) { win.setBounds(bounds); win.__displayId = display.id; }
+}
+function sendDisplays() {
+  send('displays', { home: homeDisplay().id, list: screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds, area: d.workArea })) });
 }
 
 // After sleep, unlock or a monitor change: put the strip back in place, on top, and make it draw again.
@@ -432,7 +446,7 @@ else app.whenReady().then(() => {
   powerMonitor.on('resume', wake);
   powerMonitor.on('unlock-screen', wake);
   setInterval(checkMicInUse, 5000);
-  for (const ev of ['display-metrics-changed', 'display-added', 'display-removed']) screen.on(ev, () => setTimeout(() => reassertWindow(), 1000));
+  for (const ev of ['display-metrics-changed', 'display-added', 'display-removed']) screen.on(ev, () => setTimeout(() => { reassertWindow(); sendDisplays(); }, 1000));
   // Other always-on-top windows (a full-screen Citrix or remote desktop session, full-screen video, some meeting apps)
   // put themselves above the strip whenever they are clicked: raise it back every few seconds. The strip is
   // click-through and see-through, so being on top costs nothing; moveTop never takes the keyboard focus.
@@ -443,6 +457,10 @@ else app.whenReady().then(() => {
   }, 3000);
 
   ipcMain.on('pet:ignore-mouse', (_e, ignore) => win.setIgnoreMouseEvents(ignore, { forward: true }));
+  ipcMain.on('pet:lift', (_e, on, displayId) => {
+    if (screen.getAllDisplays().some((d) => d.id === displayId)) homeId = displayId;
+    lifted = !!on; placeWindow();
+  });
   ipcMain.on('pet:copy-text', (e, text) => {
     if (e.senderFrame && e.senderFrame.url.startsWith(ORIGIN + '/pet/')) clipboard.writeText(String(text || '').slice(0, 20000));
   });
@@ -461,6 +479,7 @@ else app.whenReady().then(() => {
   });
   ipcMain.on('pet:ready', (_e, settings) => {
     state = { ...state, ...settings }; buildMenu();
+    sendDisplays();
     // The page was (re)loaded: give it the current pause and call state again.
     if (state.paused) send('pause', true);
     send('hotkey', hotkeyOk[HOTKEY] === false ? 'the tray icon' : keyLabel(HOTKEY));

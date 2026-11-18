@@ -43,8 +43,20 @@
   let present = false, anim = 'sleep', leaveTimer = 0;
   let x = 0, targetX = null, speed = 0, facingLeft = false, nextDecision = 0, lastFrame = 0;
 
-  function paint() { pet.className = anim + (facingLeft ? ' left' : '') + (present ? '' : ' away') + (window.ben3d ? ' three' : ''); }
-  function setAnim(name) { anim = name; paint(); }
+  function paint() {
+    pet.className = anim + (facingLeft ? ' left' : '') + (present ? '' : ' away') + (window.ben3d ? ' three' : '')
+      + (held || flying ? ' physics' : '') + (lifting ? ' lifting' : '');
+  }
+  // While he is held, flying or dizzy the drag-and-throw code owns the animation; the rest waits (recover() catches up).
+  function setAnim(name, force = false) { if (!force && (held || flying || stunned)) return; anim = name; paint(); }
+
+  // Drag and throw (see the section below); declared here because painting and placing use them.
+  let y = 0, vx = 0, vy = 0;                     // height above the floor, and velocity, in px and px/s
+  let held = false, flying = false, stunned = false, lifted = false, lifting = false;
+  const floorShadow = $('floor-shadow'), stage = $('stage');
+  // Every screen's bounds and work area in screen DIPs (sent by the shell), and the one he is on now.
+  // x and y above stay relative to that screen's work area: x from its left edge, y up from its taskbar.
+  let displays = null, homeId = null;
 
   function arrive() {
     clearTimeout(leaveTimer);
@@ -61,10 +73,11 @@
     if (!ben) return;
     if (!present) { ben.pause(); return; }   // out of sight: no rendering
     ben.resume();
-    let state = { listen: 'listen', think: 'think', talk: 'talk', sleep: 'sleep' }[anim] || (quiet() ? 'quiet' : 'idle');
+    let state = { listen: 'listen', think: 'think', talk: 'talk', sleep: 'sleep', held: 'held', fly: 'fly', dizzy: 'dizzy' }[anim] || (quiet() ? 'quiet' : 'idle');
     if (now < waveUntil && (state === 'idle' || state === 'listen')) state = 'wave';
     ben.setState(state);
-    ben.setFps(state === 'talk' || state === 'wave' ? 24 : 12);   // he renders in software: keep it light
+    ben.setFps(['talk', 'wave', 'held', 'fly', 'dizzy'].includes(state) ? 24 : 12);   // he renders in software: keep it light
+    if (ben.setAirborne) ben.setAirborne(held || y > 2);
     ben.setTalkLevel(level);
   }
 
@@ -78,7 +91,7 @@
     clearTimeout(leaveTimer);
     if (settings.stay) return;
     leaveTimer = setTimeout(() => {
-      if (mode !== 'ambient' && mode !== 'sleep' || !typeForm.hidden || playing) { leaveSoon(3000); return; }
+      if (mode !== 'ambient' && mode !== 'sleep' || !typeForm.hidden || playing || held || flying || stunned) { leaveSoon(3000); return; }
       youText = replyText = ''; render(); leave();
     }, ms);
   }
@@ -97,11 +110,15 @@
   }
 
   function place() {
-    const max = Math.max(0, innerWidth - 120);
+    const max = Math.max(0, area().width - 120);
     x = Math.min(max, Math.max(0, x));
-    pet.style.transform = `translateX(${x}px)`;
+    pet.style.transform = `translate(${x}px, ${-y}px)`;
     bubble.classList.toggle('edge-left', x < 110);
     bubble.classList.toggle('edge-right', x > max - 110);
+    // A shadow on the floor under him while he is off it: smaller and fainter the higher he is.
+    const high = Math.min(1, y / 400), off = present && (held || y > 2);
+    floorShadow.style.opacity = off ? (1 - high * 0.6).toFixed(2) : '0';
+    floorShadow.style.transform = `translateX(${x}px) scale(${(1 - high * 0.5).toFixed(2)})`;
   }
 
   function decide(now) {
@@ -121,7 +138,9 @@
   function frame(now) {
     const dt = Math.min(0.1, (now - lastFrame) / 1000);
     lastFrame = now;
-    if (settings.stay && present && mode === 'ambient' && bubble.hidden) {   // wandering only in stay mode
+    const moved = present && physics(dt, now);
+    if (pose(now) || moved) place();
+    if (settings.stay && present && mode === 'ambient' && bubble.hidden && !held && !flying && !stunned) {   // wandering only in stay mode
       if (targetX !== null) {
         const step = speed * dt, gap = targetX - x;
         if (Math.abs(gap) <= step) { x = targetX; targetX = null; setAnim('idle'); nextDecision = now + 1500 + Math.random() * 5000; }
@@ -605,7 +624,9 @@
           if (m.state === 'thinking') { turnDone = false; replyText = ''; if (mode !== 'listen') setMode('think'); }
           break;
         case 'transcript': youText = m.text; replyText = ''; render(); break;
-        case 'reply_delta': lastSent = null; replyText += m.text;   // the answer has started: no more resuming render(); clearTimeout(hideTimer); break;
+        case 'reply_delta':   // the answer has started: no more resuming
+          lastSent = null; replyText += m.text; render(); clearTimeout(hideTimer);
+          break;
         case 'reply_done':
           turnDone = true; replyText = m.text; render();
           if (!playing) finishTurn();
@@ -705,17 +726,202 @@
     else rephraseSay('Done.', 1500);
   }
 
+  // ---------------------------------------------------------------- drag and throw
+  // Pick Ben up and drop him, or fling him: he flies, bounces off the screen edges and lands with a squash
+  // (dizzy after a hard one). While he is off the floor the shell grows the window to the whole work area.
+  const GRAVITY = 2600, MAX_THROW = 3200, FLOOR_BOUNCE = 0.42, WALL_BOUNCE = 0.55, DIZZY_IMPACT = 1700;
+  let grab = null;            // { id, offX, offY, sx, sy } while the button is down on him
+  let samples = [];           // recent positions while held, for the throw speed
+  let suppressClick = false, liftTimer = 0, dizzyTimer = 0;
+  let tilt = 0, tiltV = 0, squashAt = 0, squashAmt = 0, hardest = 0, lastPose = '';
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const pick = (list) => list[Math.floor(Math.random() * list.length)];
+  const ceiling = () => Math.max(0, (lifted ? area().height : stage.clientHeight) - 150);
+
+  /** The work area he is on, in screen DIPs. In a browser tab (no shell) it is the page itself, in page pixels. */
+  function area() {
+    const d = displays && (displays.find((s) => s.id === homeId) || displays[0]);
+    if (d) return d.area;
+    return { x: 0, y: stage.getBoundingClientRect().bottom - stage.clientHeight, width: innerWidth, height: stage.clientHeight };
+  }
+  /** Pointer position in the same frame as area(). */
+  const pointer = (e) => (displays ? { px: e.screenX, py: e.screenY } : { px: e.clientX, py: e.clientY });
+  const screenAt = (px, py) => displays && displays.find((d) => px >= d.bounds.x && px < d.bounds.x + d.bounds.width && py >= d.bounds.y && py < d.bounds.y + d.bounds.height);
+
+  /** He crossed onto another screen: keep where he is on the desktop, and move the window there. */
+  function moveToScreen(id) {
+    const a = area(), gx = a.x + x, feet = a.y + a.height - y;
+    homeId = id;
+    const b = area();
+    x = gx - b.x; y = b.y + b.height - feet;
+    if (shell && shell.lift) {
+      lifting = true; paint(); shell.lift(true, homeId);
+      clearTimeout(liftTimer); liftTimer = setTimeout(endLifting, 300);
+    }
+  }
+
+  function setLift(on) {
+    if (lifted === on) return;
+    lifted = on;
+    document.body.classList.toggle('lifted', on);
+    if (!shell || !shell.lift) { place(); return; }
+    lifting = true; paint();                       // hidden until the window has its new size, so he never jumps
+    shell.lift(on, homeId);
+    clearTimeout(liftTimer); liftTimer = setTimeout(endLifting, 300);
+  }
+  function endLifting() { if (!lifting) return; lifting = false; clearTimeout(liftTimer); place(); paint(); }
+
+  /** A one-liner in the bubble, only when it is not showing anything else. */
+  function quip(text, ms) { if (bubble.hidden && typeForm.hidden) say(text, ms); }
+
+  function pickUp() {
+    held = true; flying = false; stunned = false; samples = []; targetX = null; tiltV = 0;
+    clearTimeout(clickTimer); clearTimeout(leaveTimer); clearTimeout(dizzyTimer);
+    setLift(true); setAnim('held', true);
+    if (Math.random() < 0.6) quip(pick(['Whoa!', 'Hey!', 'Put me down!', 'Where are we going?']), 1200);
+  }
+
+  function release() {
+    grab = null;
+    if (!held) return;
+    held = false;
+    suppressClick = true; setTimeout(() => { suppressClick = false; }, 400);
+    const a = samples[0], b = samples[samples.length - 1], now = performance.now();
+    const span = a && b ? (b.t - a.t) / 1000 : 0;
+    if (span > 0.01 && now - b.t < 80) { vx = (b.x - a.x) / span; vy = (b.y - a.y) / span; }
+    else vx = vy = 0;                               // he was held still before letting go: just drop
+    const speed = Math.hypot(vx, vy);
+    if (speed > MAX_THROW) { vx *= MAX_THROW / speed; vy *= MAX_THROW / speed; }
+    samples = []; hardest = 0; flying = true;
+    setAnim('fly', true);
+    if (speed > 1600) quip(pick(['Wheee!', 'Aaaah!', 'I can fly!']), 1400);
+  }
+
+  function squash(impact, now) { squashAt = now; squashAmt = Math.min(0.32, impact / 5000); }
+
+  function land() {
+    flying = false; vx = vy = 0; setLift(false);
+    if (hardest > DIZZY_IMPACT) {
+      stunned = true; setAnim('dizzy', true);
+      quip(pick(['Oof…', 'Ow, my head…', 'Everything is spinning…', 'Again! …No, wait.']), 2200);
+      dizzyTimer = setTimeout(recover, 2600);
+    } else recover();
+  }
+  function recover() {
+    if (held || flying) return;
+    stunned = false;
+    setAnim({ listen: 'listen', think: 'think', talk: 'talk', sleep: 'sleep' }[mode] || 'idle', true);
+    nextDecision = performance.now() + 2500;
+    if (mode === 'ambient' || mode === 'sleep') leaveSoon(LINGER_MS);
+  }
+
+  /** A damped spring: he swings when carried and leans into a throw, then settles upright. */
+  function swingTo(target, dt) {
+    tiltV += ((target - tilt) * 90 - tiltV * 7) * dt; tilt += tiltV * dt;
+    if (target === 0 && Math.abs(tilt) < 0.05 && Math.abs(tiltV) < 0.5) tilt = tiltV = 0;
+  }
+
+  /** One step of the physics. Returns true when he moved. */
+  function physics(dt, now) {
+    if (held) {
+      const a = samples[0], b = samples[samples.length - 1];
+      const v = a && b && b.t - a.t > 10 && now - b.t < 80 ? (b.x - a.x) / ((b.t - a.t) / 1000) : 0;
+      swingTo(clamp(-v * 0.015, -40, 40), dt);     // the body trails behind the hand
+      return false;
+    }
+    if (!flying) { if (tilt || tiltV) swingTo(0, dt); return false; }
+    vy -= GRAVITY * dt; x += vx * dt; y += vy * dt;
+    // Onto other screens. Going up he passes behind the upper screen's taskbar once his middle crosses the edge;
+    // if the throw runs out before he clears it, he falls back to the screen his feet are over.
+    const other = (s) => (s && s.id !== homeId ? s : null);
+    let a = area();
+    const cx = () => a.x + x + 60;
+    const above = () => other(screenAt(cx(), a.y - 1));
+    if (vy > 0 && y > a.height - 75 && above()) { moveToScreen(above().id); a = area(); }
+    else if (vy <= 0 && y < 0) {
+      const below = other(screenAt(cx(), a.y + a.height - y));
+      if (below) { moveToScreen(below.id); a = area(); }
+    }
+    let max = Math.max(0, a.width - 120);
+    if (x < 0 || x > max) {
+      const side = other(screenAt(x < 0 ? a.x - 1 : a.x + a.width + 1, a.y + a.height - y - 75));
+      if (side) { moveToScreen(side.id); a = area(); max = Math.max(0, a.width - 120); }
+    }
+    if (x < 0 || x > max) {                        // a screen edge with nothing beyond it
+      x = clamp(x, 0, max); hardest = Math.max(hardest, Math.abs(vx));
+      vx = -vx * WALL_BOUNCE; tiltV += vx * 0.05;
+    }
+    const top = ceiling();
+    if (y > top && !above()) { y = top; vy = -Math.abs(vy) * WALL_BOUNCE; }   // the top of the desktop
+    // (Just after rising onto a screen above he can be below its taskbar for a moment: that is not a landing.)
+    if (y <= 0 && vy <= 0) {
+      y = 0;
+      const impact = -vy;
+      hardest = Math.max(hardest, impact);
+      if (impact > 380) { vy = impact * FLOOR_BOUNCE; vx *= 0.75; squash(impact, now); }
+      else {
+        if (impact > 150) squash(impact, now);
+        vy = 0; vx *= Math.exp(-7 * dt);           // sliding to a stop
+        if (Math.abs(vx) < 25) { land(); return true; }
+      }
+    }
+    if (Math.abs(vx) > 40 && facingLeft !== vx < 0) { facingLeft = vx < 0; paint(); }
+    swingTo(clamp(vx * 0.012, -30, 30), dt);
+    return true;
+  }
+
+  /** Squash, stretch and swing go into --pose on the sprite (not the bubble). Returns true while it changes. */
+  function pose(now) {
+    const t = (now - squashAt) / 1000;
+    let s = 0;
+    if (squashAmt) { if (t < 1.2) s = squashAmt * Math.exp(-t * 7) * Math.cos(t * 26); else squashAmt = 0; }
+    // scale about his feet, swing about his head:
+    // translate(60,150) scale translate(-60,-150) translate(60,30) rotate translate(-60,-30), with the middle two merged
+    const next = s || tilt ? `translate(60px,150px) scale(${(1 + s * 0.7).toFixed(3)},${(1 - s).toFixed(3)}) translate(0,-120px) rotate(${tilt.toFixed(2)}deg) translate(-60px,-30px)` : '';
+    if (next === lastPose) return false;
+    lastPose = next;
+    if (next) pet.style.setProperty('--pose', next); else pet.style.removeProperty('--pose');
+    return true;
+  }
+
+  // Positions are taken in screen coordinates, so they stay right while the window grows or moves to another screen.
+  $('flip').addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !present) return;
+    const { px, py } = pointer(e), a = area();
+    grab = { id: e.pointerId, offX: px - (a.x + x), offY: a.y + a.height - y - py, sx: px, sy: py };
+    try { $('flip').setPointerCapture(e.pointerId); } catch {}
+  });
+  $('flip').addEventListener('pointermove', (e) => {
+    if (!grab || e.pointerId !== grab.id) return;
+    const { px, py } = pointer(e);
+    if (!held) { if (Math.hypot(px - grab.sx, py - grab.sy) < 6) return; pickUp(); }
+    const over = screenAt(px, py);                 // carried onto another screen
+    if (over && over.id !== homeId) moveToScreen(over.id);
+    const a = area();
+    x = px - grab.offX - a.x;
+    y = clamp(a.y + a.height - (py + grab.offY), 0, ceiling());
+    const now = performance.now();
+    samples.push({ t: now, x, y });
+    while (samples.length > 2 && now - samples[0].t > 100) samples.shift();
+    place();
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    $('flip').addEventListener(type, (e) => { if (grab && e.pointerId === grab.id) release(); });
+  }
+  addEventListener('blur', () => { if (grab) release(); });
+
   // ---------------------------------------------------------------- input wiring
   let clickTimer = 0;
-  $('flip').addEventListener('click', () => { clearTimeout(clickTimer); clickTimer = setTimeout(talk, 240); });
-  $('flip').addEventListener('dblclick', () => { clearTimeout(clickTimer); openTypeBox(); });
+  $('flip').addEventListener('click', () => { if (suppressClick) return; clearTimeout(clickTimer); clickTimer = setTimeout(talk, 240); });
+  $('flip').addEventListener('dblclick', () => { if (suppressClick) return; clearTimeout(clickTimer); openTypeBox(); });
+
   typeForm.addEventListener('submit', (e) => { e.preventDefault(); const t = typeBox.value.trim(); closeTypeBox(); if (t) sendText(t); });
   typeBox.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTypeBox(); });
-  addEventListener('resize', place);
+  addEventListener('resize', () => { place(); if (lifting) requestAnimationFrame(endLifting); });
 
   if (shell) {
     // The window covers the full width above the taskbar; let clicks through everywhere except the pet.
-    addEventListener('mousemove', (e) => shell.setIgnoreMouse(!(present && e.target.closest && e.target.closest('#pet'))));
+    addEventListener('mousemove', (e) => shell.setIgnoreMouse(!(held || present && e.target.closest && e.target.closest('#pet'))));
     shell.onCommand((cmd, value) => {
       if (cmd === 'talk') talk();
       else if (cmd === 'type') openTypeBox();
@@ -731,6 +937,11 @@
       else if (cmd === 'idle') idleS = Number(value);
       else if (cmd === 'mic-reset') { micReopens++; openMic(); }
       else if (cmd === 'hotkey') talkKey = String(value);
+      else if (cmd === 'displays' && value && Array.isArray(value.list)) {
+        displays = value.list;
+        if (!held && !flying) homeId = value.home;
+        place();
+      }
     });
     shell.ready({ handsfree: settings.handsfree, muted: settings.muted, stay: settings.stay });
   }
@@ -741,7 +952,8 @@
 
   // Hooks for automated checks and the browser preview.
   window.__pet = {
-    state: () => ({ mode, connected, present, followUp, paused, inCall, inMeeting, dictating, capturing, wakeEngine, micReady, x: Math.round(x), cls: pet.className, bubble: bubble.hidden ? null : bubbleText.textContent }),
+    state: () => ({ screen: homeId, mode, connected, present, followUp, paused, inCall, inMeeting, dictating, capturing, wakeEngine, micReady, x: Math.round(x), y: Math.round(y), held, flying, stunned, cls: pet.className, bubble: bubble.hidden ? null : bubbleText.textContent }),
+    fling: (sx, sy, fromY = 200) => { arrive(); setLift(true); held = true; y = fromY; samples = [{ t: performance.now() - 50, x, y }, { t: performance.now(), x: x + sx / 20, y: y + sy / 20 }]; release(); },
     sendText, talk, setStay, arrive, setAnim, toggleDictation, toggleCapture, setMode, feed: onBlock,
   };
 })();

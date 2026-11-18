@@ -243,7 +243,7 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
     const target = {
       bodyY: 0, bodyRotZ: 0, headX: 0, headZ: 0, headY: 0,
       lUpperX: 0, lUpperZ: -0.12, lElbowX: 0, lElbowZ: 0, rUpperX: 0, rUpperZ: 0.12, rElbowX: 0, rElbowZ: 0,
-      visorDown: 0, glow: 0, eyesOpen: 1, browY: 0,
+      visorDown: 0, glow: 0, eyesOpen: 1, browY: 0, lLegX: 0, rLegX: 0, lLegZ: 0, rLegZ: 0,
     };
     const breathe = Math.sin(t / 700) * 0.015;
     switch (state) {
@@ -276,6 +276,23 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
         target.visorDown = 1; target.glow = 0.9;
         target.rUpperX = -1.75; target.rUpperY = -0.6; target.rUpperZ = -0.55; target.rElbowX = -2.05;  // hand up to his mouth: "shh"
         break;
+      case 'held':
+        // picked up: arms flung up, legs kicking, eyes wide
+        target.lUpperZ = -2.7; target.rUpperZ = 2.7; target.lElbowZ = -0.3; target.rElbowZ = 0.3;
+        target.lLegX = Math.sin(t / 120) * 0.55; target.rLegX = -Math.sin(t / 120) * 0.55;
+        target.headX = -0.15; target.headZ = Math.sin(t / 260) * 0.1; target.browY = 0.06; target.eyesOpen = 1.25;
+        break;
+      case 'fly':
+        // thrown: arms and legs spread like a starfish
+        target.lUpperZ = -1.9; target.rUpperZ = 1.9; target.lLegZ = -0.45; target.rLegZ = 0.45;
+        target.headX = -0.1; target.browY = 0.06; target.eyesOpen = 1.2;
+        break;
+      case 'dizzy':
+        // a hard landing: head going round in circles, arms hanging loose
+        target.headZ = Math.sin(t / 160) * 0.22; target.headX = Math.cos(t / 160) * 0.12;
+        target.bodyRotZ = Math.sin(t / 320) * 0.06; target.eyesOpen = 0.35; target.browY = -0.03;
+        target.lUpperZ = -0.35; target.rUpperZ = 0.35;
+        break;
       case 'sleep':
         target.eyesOpen = 0.08; target.headX = 0.32; target.headZ = 0.1; target.bodyY = -0.02;
         target.lUpperZ = -0.25; target.rUpperZ = 0.25;
@@ -283,6 +300,11 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
     }
 
     ben.body.position.y = lerp(ben.body.position.y, target.bodyY, k);
+    ben.body.rotation.z = lerp(ben.body.rotation.z, target.bodyRotZ, k);
+    ben.legs[0].rotation.x = lerp(ben.legs[0].rotation.x, target.lLegX, k);
+    ben.legs[1].rotation.x = lerp(ben.legs[1].rotation.x, target.rLegX, k);
+    ben.legs[0].rotation.z = lerp(ben.legs[0].rotation.z, target.lLegZ, k);
+    ben.legs[1].rotation.z = lerp(ben.legs[1].rotation.z, target.rLegZ, k);
     ben.torso.scale.set(1 + breathe * 0.5, 1 + breathe, 1 + breathe * 0.5);
     ben.head.rotation.x = lerp(ben.head.rotation.x, target.headX + breathe, k);
     ben.head.rotation.z = lerp(ben.head.rotation.z, target.headZ, k);
@@ -337,6 +359,8 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
   return {
     setState(next) { if (next !== state) { state = next; since = performance.now(); } },
     setFps(n) { minGap = 1000 / n - 2; },
+    // In the air: the soft shadow under his feet goes (the page draws one on the floor instead).
+    setAirborne(on) { ground.visible = !on; },
     setTalkLevel(v) { talkLevel = Math.max(0, Math.min(1, v)); },
     pause() { if (running) { cancelAnimationFrame(raf); running = false; } },
     resume() { if (!running) { running = true; last = performance.now(); raf = requestAnimationFrame(frame); } },

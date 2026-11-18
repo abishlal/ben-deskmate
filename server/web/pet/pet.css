@@ -15,12 +15,33 @@ body.browser #stage { bottom: 40px; }
 #rise { position: absolute; inset: 0; transition: transform .45s cubic-bezier(.2, 1.3, .4, 1), opacity .25s; }
 #pet.away { pointer-events: none; }
 #pet.away #rise { transform: translateY(170px); opacity: 0; transition: transform .35s ease-in, opacity .3s .1s; }
-#flip { width: 120px; height: 150px; transition: transform .15s; }
-#pet.left #flip { transform: scaleX(-1); }
+/* --pose is the squash, stretch and swing from drag-and-throw (pet.js); the mirror for walking left goes after it. */
+#flip { width: 120px; height: 150px; transition: transform .15s; transform-origin: 0 0; transform: var(--pose, translate(0, 0)); }
+#pet.left #flip { transform: var(--pose, translate(0, 0)) translateX(120px) scaleX(-1); }
+#pet.physics #flip { transition: none; }
 /* 3D Ben (pet3d.js) replaces the drawn avatar when WebGL works; he faces you, so he is never mirrored */
 #ben3d { position: absolute; left: 0; bottom: 0; width: 120px; height: 150px; display: block; }
 #pet.three #sprite { display: none; }
-#pet.three.left #flip { transform: none; }
+#pet.three.left #flip { transform: var(--pose, translate(0, 0)); }
+#pet.physics, #pet.physics #flip { cursor: grabbing; }
+#pet.lifting { visibility: hidden; }   /* for the frame or two while the window grows or shrinks */
+
+/* --- drag and throw --- */
+body.lifted #stage { top: 0; height: auto; }
+#floor-shadow {
+  position: absolute; bottom: 2px; left: 0; width: 70px; height: 10px; margin-left: 25px; border-radius: 50%;
+  background: rgba(0,0,0,.22); opacity: 0; pointer-events: none; will-change: transform, opacity;
+}
+#stars { position: absolute; left: 30px; top: -6px; width: 60px; height: 24px; display: none; pointer-events: none; }
+#stars span { position: absolute; left: 24px; top: 4px; color: #ffcf3f; font-size: 15px; text-shadow: 0 0 2px #7a5a00; animation: orbit 1s linear infinite; }
+#stars span:nth-child(2) { animation-delay: -.33s; }
+#stars span:nth-child(3) { animation-delay: -.66s; }
+#pet.dizzy #stars { display: block; }
+@keyframes orbit {
+  0% { transform: translate(-26px, 0) scale(.8); opacity: .6; }  25% { transform: translate(0, 6px) scale(1.15); opacity: 1; }
+  50% { transform: translate(26px, 0) scale(.8); opacity: .6; } 75% { transform: translate(0, -5px) scale(.6); opacity: .35; }
+  100% { transform: translate(-26px, 0) scale(.8); opacity: .6; }
+}
 
 /* --- character --- */
 .shadow { fill: rgba(0,0,0,.18); }
@@ -96,6 +117,25 @@ body.browser #stage { bottom: 40px; }
 #pet.talk .arm-r { animation: wave .8s ease-in-out infinite; }
 #pet.talk .mouth { display: block; }
 #pet.talk .smile { display: none; }
+
+@keyframes kick { 0%, 100% { transform: rotate(22deg); } 50% { transform: rotate(-22deg); } }
+#pet.held .shadow, #pet.fly .shadow { display: none; }
+#pet.held .body-group, #pet.fly .body-group, #pet.dizzy .body-group { animation: none; }
+#pet.held .arm-l { transform: rotate(165deg); }
+#pet.held .arm-r { transform: rotate(-165deg); }
+#pet.held .foot-l { animation: kick .32s ease-in-out infinite; }
+#pet.held .foot-r { animation: kick .32s ease-in-out infinite -.16s; }
+#pet.held .eyes, #pet.fly .eyes { animation: none; transform: scale(1.2); }
+#pet.held .brow, #pet.fly .brow { transform: translateY(-4px); }
+#pet.held .mouth, #pet.fly .mouth { display: block; transform: scale(.7, 2.6); }
+#pet.held .smile, #pet.fly .smile { display: none; }
+#pet.fly .arm-l { transform: rotate(105deg); }
+#pet.fly .arm-r { transform: rotate(-105deg); }
+#pet.fly .foot-l { transform: rotate(18deg); }
+#pet.fly .foot-r { transform: rotate(-18deg); }
+#pet.dizzy .eyes { display: none; }
+#pet.dizzy .closed-eyes { display: block; }
+#pet.dizzy .head { animation: tilt .5s ease-in-out infinite; }
 
 #pet.sleep .eyes { display: none; }
 #pet.sleep .closed-eyes { display: block; }

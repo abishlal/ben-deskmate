@@ -196,16 +196,18 @@ async def handle_text(ws: WebSocket, text: str, speak: bool, log_as: str | None 
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     worker = asyncio.create_task(_speech_worker(ws, queue)) if speak else None
     pending = ""
+    spoken = False
 
     async def on_text(piece: str) -> None:
-        nonlocal pending
+        nonlocal pending, spoken
         await hub.send(ws, {"type": "reply_delta", "text": piece})
         if not worker:
             return
-        sentences, pending = voice.split_sentences(pending + piece)
+        sentences, pending = voice.split_sentences(pending + piece, first=not spoken)
         for s in sentences:
             if clean := _speakable(s):
                 queue.put_nowait(clean)
+                spoken = True
 
     try:
         try:

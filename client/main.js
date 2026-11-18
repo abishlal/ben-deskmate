@@ -74,21 +74,56 @@ const BRIDGE_ENV = {
   PET_ONENOTE_SECTION: readSetting('PET_ONENOTE_SECTION', '[^\\r\\n\\\\/:*?"<>|]{1,100}?', 'Quick Notes').trim(),
 };
 
+// One bridge process is kept running and answers one JSON line per request, so each call skips starting
+// PowerShell and loading the Office interop again (about a second, often more). It is restarted after a
+// crash or a timeout, and now and then to keep its memory small.
+const BRIDGE_MAX_CALLS = 200;
+let bridge = null;   // { child, buf, err, waiting, calls }
+
+function bridgeProc() {
+  if (bridge && bridge.child.exitCode === null && !bridge.child.killed && bridge.calls < BRIDGE_MAX_CALLS) return bridge;
+  if (bridge) stopBridge();
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.join(__dirname, 'bridge.ps1'), '-Op', 'serve'],
+    { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...BRIDGE_ENV } });
+  const b = { child, buf: '', err: '', waiting: null, calls: 0 };
+  const fail = (error) => { const w = b.waiting; b.waiting = null; if (w) w({ ok: false, error }); };
+  child.stdout.setEncoding('utf8').on('data', (d) => {
+    b.buf += d;
+    let i;
+    while ((i = b.buf.indexOf('\n')) >= 0) {
+      const line = b.buf.slice(0, i).replace(/^﻿/, '').trim();
+      b.buf = b.buf.slice(i + 1);
+      if (!line) continue;
+      const w = b.waiting; b.waiting = null;
+      if (!w) continue;
+      try { w(JSON.parse(line)); } catch { w({ ok: false, error: line.slice(0, 300) }); }
+    }
+  });
+  child.stderr.setEncoding('utf8').on('data', (d) => { b.err = (b.err + d).slice(-2000); });
+  child.on('error', (e) => fail(String(e.message || e)));
+  child.on('close', () => { fail((b.err || 'The desktop bridge stopped.').trim().slice(0, 300)); if (bridge === b) bridge = null; });
+  child.stdin.on('error', () => {});
+  bridge = b;
+  return b;
+}
+
+function stopBridge() {
+  const b = bridge; bridge = null;
+  if (b) { try { b.child.stdin.end(); } catch {} setTimeout(() => { try { b.child.kill(); } catch {} }, 2000); }
+}
+
 function runBridge(op, args) {
   return new Promise((resolve) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.join(__dirname, 'bridge.ps1'), '-Op', op],
-      { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...BRIDGE_ENV } });
-    let out = '', err = '';
-    const timer = setTimeout(() => { child.kill(); resolve({ ok: false, error: 'The desktop app took too long to answer.' }); }, 45000);
-    child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
-    child.stderr.setEncoding('utf8').on('data', (d) => { err += d; });
-    child.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, error: String(e.message || e) }); });
-    child.on('close', () => {
-      clearTimeout(timer);
-      try { resolve(JSON.parse(out.replace(/^﻿/, ''))); }
-      catch { resolve({ ok: false, error: (err || out || 'The bridge returned nothing.').trim().slice(0, 300) }); }
-    });
-    child.stdin.end(JSON.stringify(args || {}));
+    const b = bridgeProc();
+    b.calls++; b.err = '';
+    const timer = setTimeout(() => {
+      b.waiting = null;
+      if (bridge === b) bridge = null;
+      try { b.child.kill(); } catch {}
+      resolve({ ok: false, error: 'The desktop app took too long to answer.' });
+    }, 45000);
+    b.waiting = (res) => { clearTimeout(timer); resolve(res); };
+    b.child.stdin.write(JSON.stringify({ op, args: args || {} }) + '\n');
   });
 }
 
@@ -519,5 +554,5 @@ else app.whenReady().then(() => {
   }, 6000);
 });
 
-app.on('will-quit', () => { globalShortcut.unregisterAll(); if (keysProc) keysProc.kill(); });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); if (keysProc) keysProc.kill(); if (bridge) bridge.child.kill(); });
 app.on('window-all-closed', () => { quitReason = 'all windows closed'; app.quit(); });

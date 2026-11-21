@@ -233,7 +233,7 @@
 
   // ---------------------------------------------------------------- microphone and voice activity detection
   let micReady = false, micFailed = false;
-  let floor = 0.005, hot = 0, speaking = false, silenceMs = 0, totalMs = 0, listenStart = 0;
+  let floor = 0.005, hot = 0, speaking = false, silenceMs = 0, totalMs = 0, voicedMs = 0, listenStart = 0;
   let chunks = [], preroll = [];
   let wakeEngine = false;        // the server has a wake-word detector (openWakeWord)
   let lastUtterance = null;      // the most recent thing heard while waiting, kept for two seconds at most
@@ -304,7 +304,7 @@
     navigator.mediaDevices.addEventListener('devicechange', () => { if (settings.handsfree && connected) setTimeout(() => { micReopens++; openMic(); }, 1500); });
   }
 
-  function resetVad() { hot = 0; speaking = false; silenceMs = 0; totalMs = 0; chunks = []; preroll = []; }
+  function resetVad() { hot = 0; speaking = false; silenceMs = 0; totalMs = 0; voicedMs = 0; chunks = []; preroll = []; }
 
   function onBlock(samples, rate) {
     lastBlockAt = performance.now();
@@ -332,7 +332,7 @@
       preroll.push(copy); if (preroll.length > 8) preroll.shift();
       hot = rms > threshold ? hot + 1 : 0;
       if (hot >= 3) {
-        speaking = true; chunks = preroll.slice(); preroll = []; silenceMs = 0; totalMs = chunks.length * blockMs;
+        speaking = true; chunks = preroll.slice(); preroll = []; silenceMs = 0; totalMs = voicedMs = chunks.length * blockMs;
         if (resumable) resumeRequest();
       } else if (mode === 'listen' && performance.now() - listenStart > (capturing ? CAPTURE_SILENCE_MS : dictating ? 12000 : followUp ? FOLLOW_UP_MS : 10000)) {
         resetVad();
@@ -345,24 +345,26 @@
     }
     chunks.push(copy); totalMs += blockMs;
     silenceMs = rms > threshold * 0.6 ? 0 : silenceMs + blockMs;
+    if (!silenceMs) voicedMs += blockMs;
     const request = mode === 'listen' && !capturing && !dictating;
     // A request that has gone on for a while gets a longer pause before it counts as finished (people pause to think).
     const endSilence = request && totalMs + (carry ? carry.ms : 0) > 4000 ? 1500 : 850;
-    // A request still going after ~20 s is dictation (meeting minutes, say): turn it into a listening session.
-    if (request && connected && totalMs + (carry ? carry.ms : 0) >= LONG_REQUEST_MS) { goLong(); return; }
+    // A request with ~15 s of actual speech is dictation (meeting minutes, say): turn it into a listening session.
+    // Pauses and background noise do not count, so a short answer said slowly stays an ordinary request.
+    if (request && connected && voicedMs + (carry ? carry.voiced : 0) >= LONG_REQUEST_MS) { goLong(); return; }
     // While waiting for the wake word, cap the length: long background speech is not worth transcribing.
-    if (silenceMs >= endSilence || totalMs >= (mode !== 'listen' ? 12000 : capturing ? 40000 : 20000)) finishUtterance(rate);
+    if (silenceMs >= endSilence || totalMs >= (mode !== 'listen' ? 12000 : capturing ? 40000 : 30000)) finishUtterance(rate);
   }
 
-  const RESUME_MS = 2500, LONG_REQUEST_MS = 20000;
+  const RESUME_MS = 2500, LONG_REQUEST_MS = 15000;   // of voiced audio
   let lastSent = null;   // the request just sent: { parts, rate, ms, at }
   let carry = null;      // its audio, while you carry on speaking; it goes in front of what comes next
 
-  function sendUtterance(parts, rate, wake) {
+  function sendUtterance(parts, rate, wake, voiced = 0) {
     ws.send(JSON.stringify({ type: 'audio', wake }));
     ws.send(encodeWav(parts, rate));
     voiceTurn = true;
-    lastSent = wake ? null : { parts, rate, ms: parts.reduce((n, p) => n + p.length, 0) / rate * 1000, at: performance.now() };
+    lastSent = wake ? null : { parts, rate, ms: parts.reduce((n, p) => n + p.length, 0) / rate * 1000, voiced, at: performance.now() };
   }
 
   /** You started speaking again right after a request was sent: drop that request and keep listening. */
@@ -377,7 +379,7 @@
 
   /** The request has run long: from here it is a listening session that ends when you say "stop". */
   function goLong() {
-    if (carry) { chunks = carry.parts.concat(chunks); totalMs += carry.ms; carry = null; }
+    if (carry) { chunks = carry.parts.concat(chunks); totalMs += carry.ms; voicedMs += carry.voiced; carry = null; }
     capturing = true; captureStarted = performance.now(); listenStart = performance.now();
     ws.send(JSON.stringify({ type: 'capture_start', auto: true }));   // the recording so far becomes its first piece
     chime();
@@ -386,10 +388,11 @@
 
   function finishUtterance(rate) {
     const spokenMs = totalMs - silenceMs;
-    let parts = chunks;
+    let parts = chunks, voiced = voicedMs;
     resetVad();
     if (carry && !capturing && !dictating) {     // what you said before the pause goes first
       parts = spokenMs < 350 ? carry.parts : carry.parts.concat(parts);
+      voiced = spokenMs < 350 ? carry.voiced : carry.voiced + voiced;
       carry = null;
     } else if (spokenMs < 350 || !connected) { if (mode === 'listen') listenStart = performance.now(); return; }
     if (!connected) return;
@@ -408,11 +411,11 @@
     if (mode !== 'listen') {
       // Heard while waiting to be called. With the wake-word detector nothing is transcribed: the recording
       // is only kept for a moment in case the detector reports that it was the wake phrase.
-      if (wakeEngine) lastUtterance = { parts, rate, at: performance.now() };
+      if (wakeEngine) lastUtterance = { parts, rate, voiced, at: performance.now() };
       else sendUtterance(parts, rate, true);      // no detector: the server looks for the wake phrase in the text
       return;
     }
-    sendUtterance(parts, rate, false);
+    sendUtterance(parts, rate, false, voiced);
     wasFollowUp = followUp; followUp = false; setMode('think'); if (!wasFollowUp) say('…');
   }
   let wasFollowUp = false;
@@ -443,6 +446,8 @@
       return;
     }
     if (dictating || capturing) return;
+    // The request was sent a moment ago: this is the detector catching up, not a new call. Never drop the request.
+    if (mode === 'think' && lastSent && performance.now() - lastSent.at < 1500) return;
     chime();
     if (mode === 'talk' || mode === 'think') {      // called while answering: stop and listen
       interrupt(); followUp = false; voiceTurn = true; resetVad(); listenStart = performance.now();
@@ -454,7 +459,7 @@
     if (speaking) { setMode('listen'); say('Listening…'); return; }   // still talking: keep recording the same sentence
     const last = lastUtterance; lastUtterance = null;
     if (last && performance.now() - last.at < 2000) {                 // the sentence had just ended: use it
-      setMode('listen'); sendUtterance(last.parts, last.rate, false);
+      setMode('listen'); sendUtterance(last.parts, last.rate, false, last.voiced);
       wasFollowUp = false; setMode('think'); say('…');
     } else { resetVad(); setMode('listen'); say('Yes?'); }
   }

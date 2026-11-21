@@ -10,7 +10,7 @@ from typing import Any
 from claude_agent_sdk import tool
 
 from . import config, db, hub
-from .ms_tools import WHEN, _err, _ok, _ref, _resolve
+from .ms_tools import NOTE_BODY, WHEN, _err, _ok, _ref, _resolve
 
 
 def _guard(fn):
@@ -133,8 +133,6 @@ async def delete_todo(args: dict[str, Any]) -> dict[str, Any]:
 
 # --- OneNote desktop app ------------------------------------------------------------
 
-NOTE_BODY = ("Plain text, one paragraph per line. Start a line with '- ' for a bullet point, "
-             "'[ ] ' for a checkbox item, or '# ' for a heading.")
 
 
 @tool(
@@ -197,16 +195,28 @@ async def read_note(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     "update_note",
-    "Add text to the end of a OneNote page. Existing page content cannot be replaced, only appended to.",
-    {"type": "object", "properties": {"id": {"type": "string"}, "body": {"type": "string", "description": NOTE_BODY}},
-     "required": ["id", "body"]},
+    "Add text to a OneNote page, in the page's existing block of text. With 'under', it goes at the end of the "
+    "part under that heading (the heading is added first if the page does not have it). Existing text is never "
+    "changed or removed.",
+    {"type": "object", "properties": {
+        "id": {"type": "string"},
+        "body": {"type": "string", "description": NOTE_BODY},
+        "under": {"type": "string", "description": "Optional: the text of a heading on the page, e.g. a task's title"},
+    }, "required": ["id", "body"]},
 )
 @_guard
 async def update_note(args: dict[str, Any]) -> dict[str, Any]:
     ids = _resolve(args["id"], "n")
     if not ids:
         return _err("Unknown note reference. Call search_notes first.")
-    await hub.host_call("note_append", {"id": ids[-1], "body": args["body"]})
+    req = {"id": ids[-1], "body": args["body"]}
+    if (args.get("under") or "").strip():
+        req["under"] = args["under"].strip()
+    result = await hub.host_call("note_append", req)
+    if "under" in req:
+        found = isinstance(result, dict) and result.get("under_found")
+        return _ok(f"Added under the heading {req['under']!r}." if found
+                   else f"The page had no heading {req['under']!r}, so it was added at the end with your text under it.")
     return _ok("Added to the page.")
 
 

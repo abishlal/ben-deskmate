@@ -168,6 +168,9 @@ async def read(start: date, end: date) -> list[tuple[str, list[str]]]:
                 line = line.strip()
                 if not line or line.lower() == title.lower() or line.lower().startswith("# work log"):
                     continue
+                line = re.sub(r"^(?:#+|[-*]|\[[ xX]?\])\s+", "", line)   # pages are read back with note markup
+                if not line or line.lower().startswith("work log"):
+                    continue
                 m = _LINE_DATE.match(line)
                 if m and _MONTHS.get(m[2]):
                     try:

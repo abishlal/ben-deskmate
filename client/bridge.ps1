@@ -108,25 +108,200 @@ function Get-Pages($on) {
 
 function Escape-Html([string]$s) { $s.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;') }
 
-function New-OutlineXml([string]$text) {
-    $lines = @($text -split "`r?`n" | Where-Object { $_.Trim() })
-    if (-not $lines.Count) { $lines = @('') }
-    # "- " makes a bullet, "[ ] " a checkbox line, "# " a bold heading; anything else is a paragraph.
-    $oes = ($lines | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -match '^[-*]\s+(.*)$') {
-            "<one:OE><one:List><one:Bullet bullet=`"2`" fontSize=`"11.0`"/></one:List><one:T><![CDATA[$(Escape-Html $Matches[1])]]></one:T></one:OE>"
-        } elseif ($line -match '^\[( |x|X)?\]\s*(.*)$') {
-            $mark = [string]$Matches[1]; $rest = [string]$Matches[2]     # copy first: the next -match resets $Matches
-            $box = if ($mark -match 'x') { [char]0x2611 } else { [char]0x2610 }
-            "<one:OE><one:T><![CDATA[$box $(Escape-Html $rest)]]></one:T></one:OE>"
-        } elseif ($line -match '^#+\s+(.*)$') {
-            "<one:OE><one:T><![CDATA[<span style='font-weight:bold'>$(Escape-Html $Matches[1])</span>]]></one:T></one:OE>"
+# --- Note format ------------------------------------------------------------------------
+# The pet writes and reads pages in one small markup:
+#   "# ", "## ", "### "  headings (OneNote's Heading 1-3 styles)
+#   "- "                 bullet; indent two spaces to put it under the line above
+#   "[ ] ", "[x] "       OneNote To Do checkbox, open or ticked (also "- [ ] ")
+#   anything else        a normal paragraph
+$script:StyleLook = @{
+    h1 = @{ font = 'Calibri Light'; fontSize = '16.0'; fontColor = '#1E4E79'; spaceBefore = '0.6' }
+    h2 = @{ font = 'Calibri Light'; fontSize = '14.0'; fontColor = '#2E75B5'; spaceBefore = '0.4' }
+    h3 = @{ font = 'Calibri Light'; fontSize = '12.0'; fontColor = '#1F3763'; spaceBefore = '0.3' }
+    p  = @{ font = 'Calibri'; fontSize = '11.0'; fontColor = 'automatic'; spaceBefore = '0.0' }
+}
+$script:Boxes = "$([char]0x2610)$([char]0x2611)"     # the checkbox characters older versions of the bridge wrote
+
+# A page's XML, with $script:Nsm and $script:StyleNames (quick-style index -> name) set for it.
+function Get-PageDoc($on, [string]$id) {
+    $xml = ''; $on.GetPageContent($id, [ref]$xml, 0)       # 0 = no binary data; outlines with images are never written back
+    $doc = [xml]$xml
+    $script:OneNs = $doc.DocumentElement.NamespaceURI
+    $script:Nsm = New-Object Xml.XmlNamespaceManager $doc.NameTable
+    $script:Nsm.AddNamespace('one', $script:OneNs)
+    $script:StyleNames = @{}
+    foreach ($d in $doc.DocumentElement.SelectNodes('one:QuickStyleDef', $script:Nsm)) { $script:StyleNames[$d.GetAttribute('index')] = $d.GetAttribute('name') }
+    return , $doc     # the comma stops PowerShell from unrolling the document into its child nodes
+}
+
+function New-OneElement($doc, [string]$name) { $doc.CreateElement('one', $name, $script:OneNs) }
+
+# The index of a TagDef or QuickStyleDef on the page, added (with the next free index) when it is missing.
+function Get-DefIndex($doc, [string]$kind, [scriptblock]$match, [hashtable]$attrs) {
+    $root = $doc.DocumentElement
+    $defs = @($root.SelectNodes("one:$kind", $script:Nsm))
+    $hit = $defs | Where-Object $match | Select-Object -First 1
+    if ($hit) { return [int]$hit.GetAttribute('index') }
+    $next = 0
+    foreach ($d in $defs) { $next = [Math]::Max($next, [int]$d.GetAttribute('index') + 1) }
+    $el = New-OneElement $doc $kind
+    $el.SetAttribute('index', [string]$next)
+    foreach ($k in $attrs.Keys) { $el.SetAttribute($k, [string]$attrs[$k]) }
+    # TagDefs come first on a page, then QuickStyleDefs, then everything else.
+    $before = $root.ChildNodes | Where-Object { $_.NodeType -eq 'Element' -and $_.LocalName -ne 'TagDef' -and ($kind -eq 'TagDef' -or $_.LocalName -ne 'QuickStyleDef') } | Select-Object -First 1
+    if ($before) { $null = $root.InsertBefore($el, $before) } else { $null = $root.AppendChild($el) }
+    return $next
+}
+
+function Get-StyleIndex($doc, [string]$name) {
+    $look = $script:StyleLook[$name]
+    $i = Get-DefIndex $doc 'QuickStyleDef' { $_.GetAttribute('name') -eq $name } @{
+        name = $name; fontColor = $look.fontColor; highlightColor = 'automatic'; font = $look.font; fontSize = $look.fontSize
+        spaceBefore = $look.spaceBefore; spaceAfter = '0.0'
+    }
+    $script:StyleNames[[string]$i] = $name
+    return $i
+}
+
+function Get-TodoIndex($doc) {
+    Get-DefIndex $doc 'TagDef' { $_.GetAttribute('symbol') -eq '3' } @{ type = '0'; symbol = '3'; fontColor = 'automatic'; highlightColor = 'none'; name = 'To Do' }
+}
+
+function Test-TodoTag($doc, $tag) {
+    $def = $doc.DocumentElement.SelectSingleNode("one:TagDef[@index='$($tag.GetAttribute('index'))']", $script:Nsm)
+    return [bool]($def -and ($def.GetAttribute('symbol') -eq '3' -or $def.GetAttribute('name') -match 'to ?do'))
+}
+
+# The text of one paragraph (OE), without formatting.
+function Get-OEText($oe) {
+    $parts = foreach ($t in $oe.SelectNodes('one:T', $script:Nsm)) { [Net.WebUtility]::HtmlDecode(($t.InnerText -replace '<[^>]+>', '')) }
+    return (($parts -join '') -replace '\s+', ' ').Trim()
+}
+
+# 1-6 when the paragraph is a heading (a heading style, or the bold-only line older versions wrote), else 0.
+function Get-OEHeading($oe) {
+    $name = [string]$script:StyleNames[$oe.GetAttribute('quickStyleIndex')]
+    if ($name -match '^h([1-6])$') { return [int]$Matches[1] }
+    $t = $oe.SelectSingleNode('one:T', $script:Nsm)
+    if ($t -and $t.InnerText.Trim() -match "^<span style='font-weight:bold'>[^<]*</span>$") { return 1 }
+    return 0
+}
+
+function Get-HeadingKey([string]$s) { ($s -replace "^[#\s$($script:Boxes)]+", '' -replace '[\s:.]+$', '' -replace '\s+', ' ').Trim().ToLowerInvariant() }
+
+# Turns markup into OEs: top-level ones go into $oec (before $before, or at the end); indented bullets and
+# checkboxes go under the line above them.
+function Add-MarkupOEs($doc, $oec, [string]$text, $before) {
+    $stack = New-Object Collections.ArrayList        # open list items: @{ indent; oe }
+    foreach ($raw in ($text -split "`r?`n")) {
+        if (-not $raw.Trim()) { continue }
+        $expanded = $raw -replace "`t", '  '
+        $indent = $expanded.Length - $expanded.TrimStart().Length
+        $line = $raw.Trim()
+        $kind = 'p'; $content = $line; $done = $false
+        if ($line -match '^(#{1,6})\s+(.*)$') {
+            $kind = 'h' + [Math]::Min(3, $Matches[1].Length); $content = [string]$Matches[2]
         } else {
-            "<one:OE><one:T><![CDATA[$(Escape-Html $line)]]></one:T></one:OE>"
+            if ($line -match '^[-*+]\s+(.*)$') { $kind = 'bullet'; $content = [string]$Matches[1] }
+            if ($content -match "^(?:\[( |x|X)?\]|([$($script:Boxes)]))\s*(.*)$") {
+                $mark = [string]$Matches[1]; $box = [string]$Matches[2]; $content = [string]$Matches[3]   # copy first: -match resets $Matches
+                $kind = 'todo'; $done = ($mark -eq 'x' -or $mark -eq 'X' -or $box -eq [string][char]0x2611)
+            }
         }
-    }) -join ''
-    return "<one:Outline><one:OEChildren>$oes</one:OEChildren></one:Outline>"
+        $oe = New-OneElement $doc 'OE'
+        $oe.SetAttribute('quickStyleIndex', [string](Get-StyleIndex $doc $(if ($kind -like 'h*') { $kind } else { 'p' })))
+        if ($kind -eq 'todo') {
+            $tag = New-OneElement $doc 'Tag'
+            $tag.SetAttribute('index', [string](Get-TodoIndex $doc)); $tag.SetAttribute('completed', $(if ($done) { 'true' } else { 'false' }))
+            $null = $oe.AppendChild($tag)
+        } elseif ($kind -eq 'bullet') {
+            $list = New-OneElement $doc 'List'; $bullet = New-OneElement $doc 'Bullet'
+            $bullet.SetAttribute('bullet', '2'); $bullet.SetAttribute('fontSize', '11.0')
+            $null = $list.AppendChild($bullet); $null = $oe.AppendChild($list)
+        }
+        $t = New-OneElement $doc 'T'
+        $null = $t.AppendChild($doc.CreateCDataSection((Escape-Html $content)))
+        $null = $oe.AppendChild($t)
+
+        $container = $null
+        if ($kind -in 'bullet', 'todo' -and $indent -gt 0) {
+            while ($stack.Count -and $stack[$stack.Count - 1].indent -ge $indent) { $stack.RemoveAt($stack.Count - 1) }
+            if ($stack.Count) {
+                $owner = $stack[$stack.Count - 1].oe
+                $container = $owner.SelectSingleNode('one:OEChildren', $script:Nsm)
+                if (-not $container) { $container = New-OneElement $doc 'OEChildren'; $null = $owner.AppendChild($container) }
+                $null = $container.AppendChild($oe)
+            }
+        }
+        if (-not $container) {
+            $stack.Clear()
+            if ($before) { $null = $oec.InsertBefore($oe, $before) } else { $null = $oec.AppendChild($oe) }
+        }
+        if ($kind -in 'bullet', 'todo') { $null = $stack.Add(@{ indent = $indent; oe = $oe }) }
+    }
+}
+
+# Adds markup to a page. All text goes into one block (the page's last text outline) instead of a new block
+# per call. With $under, it goes at the end of the part under the heading with that text, and when there is
+# no such heading, the heading is added first. Returns whether the heading was found.
+function Add-NoteBody($on, [string]$id, [string]$text, [string]$under) {
+    $doc = Get-PageDoc $on $id
+    $root = $doc.DocumentElement
+    # Outlines with pictures, ink or files are left alone: they are read without their binary data.
+    $outlines = @($root.SelectNodes('one:Outline', $script:Nsm) | Where-Object {
+        -not $_.SelectSingleNode('.//one:Image|.//one:InkDrawing|.//one:InkParagraph|.//one:InkWord|.//one:InsertedFile|.//one:MediaFile', $script:Nsm) })
+    $target = $null; $before = $null; $found = $false
+    if ($under) {
+        $want = Get-HeadingKey $under
+        foreach ($o in $outlines) {
+            $kids = @($o.SelectNodes('one:OEChildren/one:OE', $script:Nsm))
+            for ($i = 0; $i -lt $kids.Count -and -not $found; $i++) {
+                if ((Get-HeadingKey (Get-OEText $kids[$i])) -ne $want) { continue }
+                $found = $true; $target = $o
+                $level = Get-OEHeading $kids[$i]; if (-not $level) { $level = 7 }
+                for ($j = $i + 1; $j -lt $kids.Count; $j++) {
+                    $l2 = Get-OEHeading $kids[$j]
+                    if ($l2 -and $l2 -le $level) { $before = $kids[$j]; break }
+                }
+            }
+            if ($found) { break }
+        }
+    }
+    if (-not $target) { $target = $outlines | Select-Object -Last 1 }
+    if (-not $target) { $target = New-OneElement $doc 'Outline'; $null = $root.AppendChild($target) }
+    $oec = $target.SelectSingleNode('one:OEChildren', $script:Nsm)
+    if (-not $oec) { $oec = New-OneElement $doc 'OEChildren'; $null = $target.AppendChild($oec) }
+    $body = if ($under -and -not $found) { "# $($under.Trim())`n$text" } else { $text }
+    Add-MarkupOEs $doc $oec $body $before
+    $defs = ($root.SelectNodes('one:TagDef|one:QuickStyleDef', $script:Nsm) | ForEach-Object { $_.OuterXml }) -join ''
+    $on.UpdatePageContent("<one:Page xmlns:one=`"$script:OneNs`" ID=`"$id`">$defs$($target.OuterXml)</one:Page>")
+    return $found
+}
+
+# A page as markup (see the note format above), title first.
+function Add-OELines($doc, $oec, [int]$depth, $lines) {
+    if (-not $oec) { return }
+    foreach ($oe in $oec.SelectNodes('one:OE', $script:Nsm)) {
+        $text = Get-OEText $oe
+        if ($text) {
+            $pad = '  ' * $depth
+            $tag = $oe.SelectSingleNode('one:Tag', $script:Nsm)
+            $level = Get-OEHeading $oe
+            if ($tag -and (Test-TodoTag $doc $tag)) {
+                $lines.Add($pad + $(if ($tag.GetAttribute('completed') -eq 'true') { '[x] ' } else { '[ ] ' }) + $text)
+            } elseif ($text -match "^([$($script:Boxes)])\s*(.*)$") {
+                $lines.Add($pad + $(if ($Matches[1] -eq [string][char]0x2611) { '[x] ' } else { '[ ] ' }) + $Matches[2])
+            } elseif ($oe.SelectSingleNode('one:List', $script:Nsm)) {
+                $lines.Add("$pad- $text")
+            } elseif ($level) {
+                $lines.Add(('#' * $level) + " $text")
+            } else {
+                $lines.Add($pad + $text)
+            }
+        }
+        foreach ($cell in $oe.SelectNodes('one:Table/one:Row/one:Cell/one:OEChildren', $script:Nsm)) { Add-OELines $doc $cell ($depth + 1) $lines }
+        Add-OELines $doc $oe.SelectSingleNode('one:OEChildren', $script:Nsm) ($depth + 1) $lines
+    }
 }
 
 function Get-Sections($on) {
@@ -174,11 +349,12 @@ function Find-Section($on, [string]$name, [bool]$create = $false) {
 }
 
 function Get-PageText($on, $id) {
-    $xml = ''; $on.GetPageContent($id, [ref]$xml, 0)
-    $doc = [xml]$xml
-    $lines = foreach ($t in $doc.GetElementsByTagName('one:T')) {
-        $plain = [Net.WebUtility]::HtmlDecode(($t.InnerText -replace '<[^>]+>', '')).Trim()
-        if ($plain) { $plain }
+    $doc = Get-PageDoc $on $id
+    $lines = New-Object Collections.Generic.List[string]
+    $title = $doc.DocumentElement.SelectSingleNode('one:Title/one:OE', $script:Nsm)
+    if ($title -and (Get-OEText $title)) { $lines.Add((Get-OEText $title)) }
+    foreach ($o in $doc.DocumentElement.SelectNodes('one:Outline', $script:Nsm)) {
+        Add-OELines $doc $o.SelectSingleNode('one:OEChildren', $script:Nsm) 0 $lines
     }
     return ($lines -join "`n")
 }
@@ -298,8 +474,8 @@ function Invoke-Op([string]$Op, $a) {
                 }
             }
             $id = ''; $on.CreateNewPage($section, [ref]$id, 0)
-            $page = "<one:Page xmlns:one=`"$script:OneNs`" ID=`"$id`"><one:Title><one:OE><one:T><![CDATA[$(Escape-Html ([string]$a.title))]]></one:T></one:OE></one:Title>$(New-OutlineXml ([string]$a.body))</one:Page>"
-            $on.UpdatePageContent($page)
+            $on.UpdatePageContent("<one:Page xmlns:one=`"$script:OneNs`" ID=`"$id`"><one:Title><one:OE><one:T><![CDATA[$(Escape-Html ([string]$a.title))]]></one:T></one:OE></one:Title></one:Page>")
+            $null = Add-NoteBody $on $id ([string]$a.body) ''
             if ($parentTitle) {
                 $sx = ''; $on.GetHierarchy($section, 4, [ref]$sx); $sd = [xml]$sx
                 $pages = @($sd.GetElementsByTagName('one:Page'))
@@ -369,10 +545,11 @@ function Invoke-Op([string]$Op, $a) {
             Out-Result (Format-Event $e)
         }
         'note_append' {
+            # Adds to the page's text (at the end, or with "under" at the end of that heading's part); never replaces it.
             $on = Get-OneNote
-            $null = Get-Pages $on
-            $on.UpdatePageContent("<one:Page xmlns:one=`"$script:OneNs`" ID=`"$([string]$a.id)`">$(New-OutlineXml ([string]$a.body))</one:Page>")
-            Out-Result $true
+            $under = if ($a.PSObject.Properties['under']) { ([string]$a.under).Trim() } else { '' }
+            $found = Add-NoteBody $on ([string]$a.id) ([string]$a.body) $under
+            Out-Result @{ under_found = [bool]$found }
         }
         'note_delete' {
             $on = Get-OneNote

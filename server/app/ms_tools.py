@@ -199,18 +199,67 @@ async def delete_todo(args: dict[str, Any]) -> dict[str, Any]:
 
 # --- OneNote ------------------------------------------------------------------
 
+NOTE_BODY = ("One paragraph per line. '# ' starts a heading ('## ', '### ' for smaller ones), '- ' a bullet point "
+             "(indent it two spaces to put it under the bullet above), '[ ] ' an open checkbox and '[x] ' a ticked one. "
+             "Other lines are normal paragraphs. No other markdown.")
+
+_CHECKBOX = re.compile(r"^(?:[-*+]\s+)?\[( |x|X)?\]\s*(.*)$")
+
+
 def _to_html(text: str) -> str:
-    return "".join(f"<p>{html.escape(line)}</p>" for line in text.splitlines() if line.strip()) or "<p></p>"
+    """The note markup (see NOTE_BODY) as OneNote page HTML: headings, nested bullet lists and To Do checkboxes."""
+    out: list[str] = []
+    levels: list[int] = []          # indents of the open <ul>s
+
+    def close_lists(down_to: int = -1) -> None:
+        while levels and levels[-1] > down_to:
+            levels.pop()
+            out.append("</ul>")
+
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        indent = len(raw.expandtabs(2)) - len(raw.expandtabs(2).lstrip())
+        line = raw.strip()
+        if m := re.match(r"^(#{1,6})\s+(.*)$", line):
+            close_lists()
+            n = min(3, len(m[1]))
+            out.append(f"<h{n}>{html.escape(m[2])}</h{n}>")
+        elif m := _CHECKBOX.match(line):
+            close_lists()
+            tag = "to-do:completed" if (m[1] or "").lower() == "x" else "to-do"
+            out.append(f'<p data-tag="{tag}">{html.escape(m[2])}</p>')
+        elif m := re.match(r"^[-*+]\s+(.*)$", line):
+            close_lists(indent)
+            if not levels or levels[-1] < indent:
+                levels.append(indent)
+                out.append("<ul>")
+            out.append(f"<li>{html.escape(m[1])}</li>")
+        else:
+            close_lists()
+            out.append(f"<p>{html.escape(line)}</p>")
+    close_lists()
+    return "".join(out) or "<p></p>"
 
 
 def _to_text(page_html: str) -> str:
+    """A OneNote page as note markup: headings, bullets and checkboxes keep their markers."""
     body = re.sub(r"(?is)<(head|script|style).*?</\1>", "", page_html)
+    body = re.sub(r"(?i)<h([1-6])\b[^>]*>", lambda m: "\n" + "#" * int(m[1]) + " ", body)
+    body = re.sub(r"(?i)<p\b[^>]*data-tag=\"[^\"]*to-do:completed[^\"]*\"[^>]*>", "\n[x] ", body)
+    body = re.sub(r"(?i)<p\b[^>]*data-tag=\"[^\"]*to-do[^\"]*\"[^>]*>", "\n[ ] ", body)
+    body = re.sub(r"(?i)<li\b[^>]*>", "\n- ", body)
     body = re.sub(r"(?i)<\s*(br|/p|/div|/li|/h[1-6]|/tr)[^>]*>", "\n", body)
     lines = (html.unescape(re.sub(r"<[^>]+>", "", body)).replace("\xa0", " ")).splitlines()
     return "\n".join(l.strip() for l in lines if l.strip())
 
 
-@tool("save_note", "Create a new page in the user's OneNote (default notebook).", {"title": str, "body": str})
+@tool(
+    "save_note",
+    "Create a new page in the user's OneNote (default notebook).",
+    {"type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string", "description": NOTE_BODY}},
+     "required": ["title", "body"]},
+)
 @_guard
 async def save_note(args: dict[str, Any]) -> dict[str, Any]:
     page = (f"<!DOCTYPE html><html><head><title>{html.escape(args['title'])}</title></head>"
@@ -253,17 +302,32 @@ async def read_note(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     "update_note",
-    "Add text to the end of a OneNote page. Existing page content cannot be replaced, only appended to.",
-    {"type": "object", "properties": {"id": {"type": "string"}, "body": {"type": "string"}}, "required": ["id", "body"]},
+    "Add text to the end of a OneNote page. With 'under', the heading is added first unless the page already has it. "
+    "Existing text is never changed or removed.",
+    {"type": "object", "properties": {
+        "id": {"type": "string"},
+        "body": {"type": "string", "description": NOTE_BODY},
+        "under": {"type": "string", "description": "Optional: the text of a heading on the page, e.g. a task's title"},
+    }, "required": ["id", "body"]},
 )
 @_guard
 async def update_note(args: dict[str, Any]) -> dict[str, Any]:
     ids = _resolve(args["id"], "n")
     if not ids:
         return _err("Unknown note reference. Call search_notes first.")
+    body, note = args["body"], "Added to the page."
+    under = (args.get("under") or "").strip()
+    if under:
+        # Graph can only append here, so the text goes at the end of the page, under a new heading if needed.
+        page = _to_text(await call("GET", f"/me/onenote/pages/{ids[0]}/content", text=True))
+        key = under.lower().strip(" :.")
+        if any(re.sub(r"^#+\s*", "", l).lower().strip(" :.") == key for l in page.splitlines() if l.startswith("#")):
+            note = "Added at the end of the page (the heading is already on it)."
+        else:
+            body, note = f"# {under}\n{body}", f"Added at the end of the page under a new heading {under!r}."
     await call("PATCH", f"/me/onenote/pages/{ids[0]}/content",
-               json=[{"target": "body", "action": "append", "content": _to_html(args["body"])}])
-    return _ok("Added to the page.")
+               json=[{"target": "body", "action": "append", "content": _to_html(body)}])
+    return _ok(note)
 
 
 @tool("delete_note", "Permanently delete a OneNote page. Ask the user to confirm first.", {"id": str})

@@ -105,6 +105,16 @@ async def main() -> None:
     assert "<title>Groceries &amp; more</title>" in pages["P1"]["html"] and "<p>Milk</p><p>Eggs</p>" in pages["P1"]["html"]
     print(await call(ms_tools.delete_note, id="n2"))
 
+    # Note markup: headings, nested bullets and checkboxes become OneNote HTML and read back the same way.
+    markup = "# API auth\n- finished login\n  - token refresh too\n- tests next\n[ ] ask Priya about limits\n[x] check logs\nplain line"
+    page_html = ms_tools._to_html(markup)
+    assert page_html == ("<h1>API auth</h1><ul><li>finished login</li><ul><li>token refresh too</li></ul><li>tests next</li></ul>"
+                         '<p data-tag="to-do">ask Priya about limits</p><p data-tag="to-do:completed">check logs</p><p>plain line</p>'), page_html
+    back = ms_tools._to_text(page_html)
+    assert back == "# API auth\n- finished login\n- token refresh too\n- tests next\n[ ] ask Priya about limits\n[x] check logs\nplain line", back
+    assert ms_tools._to_html("- [ ] nested box") == '<p data-tag="to-do">nested box</p>'
+    print(await call(ms_tools.update_note, id="n1", body="- more", under="Ship & test"))
+
     msgraph._access_token = lambda: None
     print(await call(ms_tools.list_todos))
     print(f"\n{len(log)} requests sent to the fake Graph; all assertions passed")

@@ -102,6 +102,20 @@ Things to say:
 - **Task triage.** "Help me sort my tasks." It groups your open tasks into overdue, due soon, no due date and stale
   (open more than 14 days), looks at free time today and on the next working day, and goes through them a couple at a
   time, proposing a time or a calendar block. The morning briefing mentions undated and stale tasks and offers this.
+- **Day plan.** The morning briefing ends by asking what you are working on today, or say it any time: "Today I'm
+  working on the API auth, the weekly report and the client demo." New tasks are added to To Do due today; ones already
+  on your list are moved to today instead of added twice. Talk as long as you like; after about 15 seconds of
+  speech (pauses don't count) it keeps listening until you say "stop". A long request is handled like any other: only
+  a text you asked it to write (a summary, draft, email or minutes) goes on your clipboard.
+- **Task notes.** Tell it what you did on a task or what questions you have ("for the API task, I finished login, and
+  I need to ask Priya about rate limits"), while planning or later. Notes go on one OneNote page per day,
+  "Task notes - 21 Nov 2026", with a heading per task, progress as bullets and questions as checkboxes. The task's
+  details in To Do get a line naming that page. A task without notes gets no page, and a day without notes has no page.
+  Later notes on a task go under that task's heading, in the same block of text. Ben only adds to pages; it never
+  changes or removes what is there.
+- **Note formatting.** Every note Ben writes uses OneNote's own Heading 1-3 styles, real bullet lists (nested when
+  indented) and To Do checkboxes, and reads pages back with that structure. With the Microsoft sign-in, additions
+  under a heading go at the end of the page rather than inside that heading's part.
 - **End-of-day wrap-up.** On working days at 18:00 (once you are at the PC) it says what got done, what is still due,
   and what is first tomorrow, and asks whether to move anything. On Fridays it offers the weekly report.
 - **Weekly report.** "Draft my weekly report." It collects the week's completed tasks, meetings and changed note pages,
@@ -110,9 +124,16 @@ Things to say:
   offers to take notes; tell it the notes and action items and it saves one page (in a "Meetings" section if you have
   one) and adds your own action items to To Do. Other people's items stay on the page only.
 - **Focus time.** "Focus on the report for 45 minutes." It blocks the time on your calendar and stays silent except
-  for reminders and meeting alerts, then checks in at the end. "Stop focus" ends it early.
+  for reminders and meeting alerts, then checks in at the end. "Stop focus" ends it early. With the Microsoft sign-in
+  it also sets your Teams status to Do not disturb until the focus time ends (Teams clears it by itself; stopping
+  early resets it right away). "Don't change my Teams status during focus" turns that off. If you signed in before
+  this was added, sign in again once to grant the Teams presence permission.
 - **Breaks.** Off by default. "Remind me to take a break every hour" sets it; it counts only time you are actually at
   the keyboard (five minutes away resets it) and only in working hours.
+- **Water.** On by default: every 60 minutes at the PC it reminds you to drink some water. Tell it "I just had a glass"
+  and the clock starts again (it also counts your glasses for the day). "Remind me to drink water every 45 minutes"
+  changes it, "stop the water reminders" turns it off. It stays quiet while you are away, in quiet hours, in meetings
+  and in focus time, and "snooze that" works on it.
 - Briefings and wrap-ups wait until you are at the PC, and are skipped if you don't turn up within a few hours.
 
 ## Work log for appraisals
@@ -189,7 +210,8 @@ instead of its local database. Reminders and memory stay local. Signing out swit
    - Supported account types: accounts in this organizational directory only.
    - No redirect URI.
    - After creating it: Authentication → Advanced settings → Allow public client flows → Yes.
-   - API permissions → Add → Microsoft Graph → Delegated: `Tasks.ReadWrite`, `Notes.ReadWrite`, `Calendars.ReadWrite`, `User.Read`.
+   - API permissions → Add → Microsoft Graph → Delegated: `Tasks.ReadWrite`, `Notes.ReadWrite`, `Calendars.ReadWrite`, `User.Read`, `Presence.ReadWrite`
+     (the last one lets focus time set your Teams status to Do not disturb).
      Nothing for mail or contacts.
 2. Put the Application (client) ID in `.env` as `MS_CLIENT_ID`, and optionally your Directory (tenant) ID as `MS_TENANT_ID`, then `docker compose up -d`.
 3. Sign in. The command prints a code and a link; finish in your browser:

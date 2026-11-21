@@ -170,7 +170,7 @@ async def morning_briefing() -> None:
                      "and check the pending reminders. Then say in at most five sentences what is on today, what is due or "
                      "overdue, and what you would suggest doing first. If some tasks have no due date or have been open for "
                      "weeks, say how many and offer to sort them with the user. If there is nothing at all, say so in one "
-                     "cheerful sentence.")
+                     "cheerful sentence. End by asking what they are working on today, so you can add it to their tasks.")
 
 
 async def daily_wrapup() -> None:
@@ -199,6 +199,7 @@ async def run() -> None:
             planner.meeting_followups()
             planner.focus_end()
             planner.break_nudge()
+            planner.water_nudge()
             await morning_briefing()
             await daily_wrapup()
             await worklog.daily_collect()

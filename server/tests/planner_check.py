@@ -1,6 +1,6 @@
 """Checks the planning features without Claude, Outlook or OneNote, on a throwaway database:
 task triage, day and week summaries, meeting notes, focus time, snoozing, holding messages back during
-meetings and focus time, meeting follow-ups, break reminders, the usage report and the "stop" phrases.
+meetings and focus time, meeting follow-ups, break and water reminders, the usage report and the "stop" phrases.
 
 docker compose exec -e PET_DATA_DIR=/tmp/planner-check server python tests/planner_check.py
 """
@@ -12,7 +12,8 @@ assert os.environ.get("PET_DATA_DIR", "").startswith("/tmp/"), "run this with PE
 from datetime import timedelta  # noqa: E402
 
 from app import config, db, hub, planner, prefs, tools  # noqa: E402
-from app.main import _CAPTURE_STOP, _DISMISS, capture_request  # noqa: E402
+from app.main import (_CAPTURE_STOP, _DISMISS, AUTO_TASK, capture_prompt, capture_request,  # noqa: E402
+                      drop_wake_words)
 
 DAY = 86400
 
@@ -85,6 +86,46 @@ async def main() -> None:
     assert db.one("SELECT 1 FROM outbox WHERE kind='focus' AND body LIKE '%report is over%'")
     assert planner.hold_reason() is None
 
+    # Focus time sets Teams to Do not disturb through Graph, and stopping early clears it.
+    import json as _json
+    import httpx
+    from app import msgraph
+    sent: list[tuple[str, dict]] = []
+
+    def graph(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer fake"
+        sent.append((request.url.path.removeprefix("/v1.0"), _json.loads(request.content or b"{}")))
+        return httpx.Response(200)
+
+    real = (msgraph._http, msgraph._access_token, msgraph.signed_in)
+    msgraph._http = httpx.AsyncClient(base_url="https://graph.microsoft.com/v1.0", transport=httpx.MockTransport(graph))
+    msgraph._access_token = lambda *scopes: "fake"
+    msgraph.signed_in = lambda: True
+    out = await call(planner.start_focus, minutes=30, label="deck", block_calendar=False)
+    assert "Do not disturb" in out, out
+    assert sent == [("/me/presence/setUserPreferredPresence",
+                     {"availability": "DoNotDisturb", "activity": "DoNotDisturb", "expirationDuration": "PT30M"})], sent
+    out = await call(planner.stop_focus)
+    assert "back to automatic" in out and sent[-1][0] == "/me/presence/clearUserPreferredPresence", (out, sent)
+    out = await call(planner.stop_focus)
+    assert len(sent) == 2, sent                                  # nothing to clear when focus is already off
+    prefs.put("focus_teams_dnd_enabled", "off")
+    await call(planner.start_focus, minutes=10, block_calendar=False)
+    await call(planner.stop_focus)
+    assert len(sent) == 2, sent                                  # the setting turns it off
+    prefs.put("focus_teams_dnd_enabled", "on")
+    msgraph._access_token = lambda *scopes: None if scopes else "fake"   # an older sign-in without the scope
+    out = await call(planner.start_focus, minutes=10, block_calendar=False)
+    assert "sign in again" in out and not planner.hold_reason() is None, out
+    await call(planner.stop_focus)
+    assert len(sent) == 2, sent                                  # failed to set, so nothing to clear
+    msgraph.signed_in = lambda: False
+    out = await call(planner.start_focus, minutes=10, block_calendar=False)
+    assert "sign-in is not set up" in out, out
+    await call(planner.stop_focus)
+    msgraph._http, msgraph._access_token, msgraph.signed_in = real
+    print("teams do not disturb ok")
+
     # A meeting on the calendar: quiet now, a follow-up after it ends.
     planner._calendar = [ev("Standup", now - 600, now + 600), ev("Retro", now - 3000, now - 120),
                          ev("Lunch", now - 600, now + 600, meeting=False)]
@@ -109,6 +150,39 @@ async def main() -> None:
     planner.break_nudge()
     assert db.one("SELECT 1 FROM outbox WHERE kind='break'") and hub.active_since >= now
     print("break reminder ok")
+
+    # Water reminders: on by default, only after the interval, only while at the PC, and a drink restarts the clock.
+    db.run("DELETE FROM outbox WHERE kind='break'")
+    prefs.in_quiet_hours = lambda at=None: False
+    assert prefs.minutes("water_every_minutes") == 60
+    planner.water_nudge()                                  # first run only starts the clock
+    assert not db.one("SELECT 1 FROM outbox WHERE kind='water'")
+    db.kv_set("water_last", str(now - 61 * 60))
+    hub.active_since = None                                # away from the PC: nothing
+    planner.water_nudge()
+    assert not db.one("SELECT 1 FROM outbox WHERE kind='water'")
+    hub.active_since = now - 60
+    planner.water_nudge()
+    assert len(db.rows("SELECT 1 FROM outbox WHERE kind='water'")) == 1
+    planner.water_nudge()                                  # not again straight away
+    assert len(db.rows("SELECT 1 FROM outbox WHERE kind='water'")) == 1
+    print(await call(planner.log_water))
+    print(await call(planner.log_water, glasses=2))
+    assert planner.water_today() == 3 and int(db.kv_get("water_last")) >= now
+    db.kv_set("water_last", str(now - 61 * 60))
+    db.kv_set("focus_until", str(now + 600))               # held back during focus time
+    planner.water_nudge()
+    assert len(db.rows("SELECT 1 FROM outbox WHERE kind='water'")) == 1
+    db.kv_set("focus_until", "0")
+    planner.water_nudge()
+    last = db.rows("SELECT body FROM outbox WHERE kind='water' ORDER BY id")
+    assert len(last) == 2 and "glass number 4" in last[-1]["body"], last
+    prefs.put("water_every_minutes", "0")
+    db.kv_set("water_last", str(now - 999 * 60))
+    planner.water_nudge()
+    assert len(db.rows("SELECT 1 FROM outbox WHERE kind='water'")) == 2
+    db.run("DELETE FROM outbox WHERE kind='water'")
+    print("water reminder ok")
 
     # Snooze repeats the last thing announced.
     print(await call(planner.snooze, minutes=5))  # nothing delivered yet
@@ -150,6 +224,18 @@ async def main() -> None:
     for phrase in ("we need to stop the release", "done with the migration"):
         assert not _CAPTURE_STOP.match(phrase), phrase
     print("listening-session phrases ok")
+
+    # Repeated wake phrases are dropped from the start of what was said.
+    assert drop_wake_words("Hey Jarvis Hey Jarvis Are you listening?") == "Are you listening?"
+    assert drop_wake_words("Hey Jarvis") == ""
+    assert drop_wake_words("I started around 6.30am") == "I started around 6.30am"
+    # A request that ran long is handled normally; the clipboard only when they asked for a text.
+    auto = capture_prompt(AUTO_TASK, "I'm already on the way to studying it.", auto=True)
+    assert "Otherwise do not use deliver_text" in auto and "Pass the full result to deliver_text" not in auto
+    asked = capture_prompt("Summarize this", "some long text", auto=False)
+    assert "Pass the full result to deliver_text" in asked and '"Summarize this"' in asked
+    assert "never for ordinary answers" in planner.deliver_text.description
+    print("long requests and clipboard ok")
     print("\nall planner checks passed")
 
 

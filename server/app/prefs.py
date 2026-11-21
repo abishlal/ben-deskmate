@@ -22,6 +22,8 @@ DEFAULTS = {
     "meeting_followup_enabled": os.getenv("PET_MEETING_FOLLOWUP", "on"),
     "meeting_quiet_enabled": os.getenv("PET_MEETING_QUIET", "on"),
     "break_every_minutes": os.getenv("PET_BREAK_EVERY_MINUTES", "0"),
+    "water_every_minutes": os.getenv("PET_WATER_EVERY_MINUTES", "60"),
+    "focus_teams_dnd_enabled": os.getenv("PET_FOCUS_TEAMS_DND", "on"),
     "stale_task_days": os.getenv("PET_STALE_TASK_DAYS", "14"),
     "writing_style": "",
 }
@@ -40,6 +42,10 @@ DESCRIPTIONS = {
     "meeting_followup_enabled": "after a meeting ends, offer to capture notes and action items, on or off",
     "meeting_quiet_enabled": "stay silent and stop listening for the wake word during meetings on the calendar, on or off",
     "break_every_minutes": "suggest a stretch break after this many minutes of continuous work; 0 turns it off",
+    "water_every_minutes": "remind the user to drink water when this many minutes have passed since their last drink "
+                           "or the last water reminder, while they are at the PC; 0 turns it off",
+    "focus_teams_dnd_enabled": "set the user's Teams status to Do not disturb during focus time "
+                               "(needs the Microsoft sign-in), on or off",
     "stale_task_days": "a task open longer than this many days counts as stale in task reviews",
     "writing_style": "how the user describes their own writing tone, used when rephrasing selected text (Ctrl+Alt+R); "
                      "free text, for example 'direct and polite, a bit informal with my team'",

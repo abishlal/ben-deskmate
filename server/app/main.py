@@ -278,15 +278,16 @@ def capture_request(text: str) -> str | None:
 
 
 class Capture:
-    def __init__(self, task: str) -> None:
+    def __init__(self, task: str, auto: bool = False) -> None:
         self.task = task
+        self.auto = auto   # a request that ran long, rather than an explicit "summarise / rephrase / take minutes"
         self.parts: list[str] = []
         self.lock = asyncio.Lock()
         self.done = False
 
 
 async def begin_capture(ws: WebSocket, conn: dict, task: str, auto: bool = False) -> None:
-    conn["capture"] = Capture(task)
+    conn["capture"] = Capture(task, auto)
     log.info("listening session started%s", " (long request)" if auto else "")
     await hub.send(ws, {"type": "capture_start", "task": task, "auto": auto})
 
@@ -331,18 +332,43 @@ async def stop_capture(ws: WebSocket, conn: dict) -> None:
 
 async def _finish_capture(ws: WebSocket, conn: dict, cap: Capture) -> None:
     cap.done, conn["capture"] = True, None
-    transcript = " ".join(cap.parts).strip()
+    transcript = drop_wake_words(" ".join(cap.parts))
     words = len(transcript.split())
     log.info("listening session finished: %d words", words)
     await hub.send(ws, {"type": "capture_end", "words": words, "empty": not transcript})
     if not transcript:
         return
-    prompt = (f'The user spoke the text below and asked: "{cap.task}". Do what they asked with it. '
-              "It comes from speech recognition, so fix obvious recognition mistakes, and keep their meaning and facts. "
-              "Pass the full result to deliver_text. Then reply in one or two short spoken sentences: what you did and, "
-              "for a summary, the gist. Read the whole result aloud only if it is under forty words. Offer to paste it "
-              f'or save it as a note.\n\nWhat they said:\n"""\n{transcript}\n"""')
-    await conn["start"](handle_text(ws, prompt, speak=True, log_as=f"({cap.task}) {transcript}"))
+    prompt = capture_prompt(cap.task, transcript, cap.auto)
+    log_as = transcript if cap.auto else f"({cap.task}) {transcript}"
+    await conn["start"](handle_text(ws, prompt, speak=True, log_as=log_as))
+
+
+def drop_wake_words(text: str) -> str:
+    """The text without the wake phrase(s) at its start: "Hey Jarvis, hey Jarvis, are you there?" -> "are you there?"."""
+    for _ in range(4):
+        rest = voice.strip_wake_word(text)
+        if rest is None:
+            break
+        text = rest
+    return text.strip()
+
+
+def capture_prompt(task: str, transcript: str, auto: bool) -> str:
+    """What the agent is asked to do with the text of a listening session."""
+    speech = ("It comes from speech recognition, so fix obvious recognition mistakes, and keep their meaning and facts.")
+    said = f'\n\nWhat they said:\n"""\n{transcript}\n"""'
+    if auto:
+        # A request that simply ran long: often an ordinary request, an answer to something you asked, or a question.
+        return ("The user spoke at length; the text below is what they said, starting with what they want. " + speech +
+                " Handle it like any other request: answer it, or use your tools to do what it asks. Only if they asked "
+                "you to write something for them to use elsewhere (a summary, rewrite, draft, email, message or meeting "
+                "minutes; if it is about a meeting, " + MEETING_TASK + "), pass that full text to deliver_text, which "
+                "copies it to their clipboard, then say in one or two short sentences what you did and offer to paste "
+                "or save it. Otherwise do not use deliver_text, and reply as you normally would." + said)
+    return (f'The user spoke the text below and asked: "{task}". Do what they asked with it. ' + speech +
+            " Pass the full result to deliver_text. Then reply in one or two short spoken sentences: what you did and, "
+            "for a summary, the gist. Read the whole result aloud only if it is under forty words. Offer to paste it "
+            "or save it as a note." + said)
 
 
 async def handle_dictation(ws: WebSocket, wav: bytes, lock: asyncio.Lock) -> None:

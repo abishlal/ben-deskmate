@@ -428,14 +428,17 @@ def focus_state() -> dict | None:
 
 @tool(
     "start_focus",
-    "Start focus time: until it ends the pet stays silent except for reminders and meeting alerts, and it can block "
-    "the time on the calendar. At the end it checks in with the user.",
+    "Start focus time: until it ends the pet stays silent except for reminders and meeting alerts, it can block "
+    "the time on the calendar, and it sets the user's Teams status to Do not disturb (cleared automatically at the "
+    "end). At the end it checks in with the user.",
     {
         "type": "object",
         "properties": {
             "minutes": {"type": "integer", "description": "5 to 240"},
             "label": {"type": "string", "description": "What the user is focusing on"},
             "block_calendar": {"type": "boolean", "description": "Put a 'Focus' appointment on the calendar; default true"},
+            "teams_dnd": {"type": "boolean", "description": "Set the user's Teams status to Do not disturb until focus "
+                                                           "ends; default from the focus_teams_dnd_enabled setting"},
         },
         "required": ["minutes"],
     },
@@ -462,7 +465,25 @@ async def start_focus(args: dict[str, Any]) -> dict[str, Any]:
             extra = " The time is blocked on the calendar."
         except hub.HostError as e:
             extra = f" Could not block the calendar: {e}"
+    extra += await _teams_dnd(args.get("teams_dnd"), minutes)
     return _ok(f"Focus time until {_hm(until)}.{extra}")
+
+
+async def _teams_dnd(wanted: bool | None, minutes: int) -> str:
+    """Set Teams to Do not disturb for the focus time; returns a sentence for the tool result."""
+    from . import msgraph
+    if wanted is None:
+        wanted = prefs.get("focus_teams_dnd_enabled") == "on"
+    if not wanted:
+        return ""
+    if not msgraph.signed_in():
+        return " Teams status not changed: Microsoft sign-in is not set up."
+    try:
+        await msgraph.set_dnd(minutes)
+    except msgraph.GraphError as e:
+        return f" Could not set Teams to Do not disturb: {e}"
+    db.kv_set("focus_teams_dnd", "1")
+    return " Teams is set to Do not disturb until then."
 
 
 @tool("stop_focus", "End focus time early.", {"type": "object", "properties": {}})
@@ -470,12 +491,21 @@ async def stop_focus(args: dict[str, Any]) -> dict[str, Any]:
     if not focus_state():
         return _ok("Focus time was not on.")
     db.kv_set("focus_until", "0")
-    return _ok("Focus time ended. Any calendar block stays on the calendar.")
+    extra = ""
+    if db.kv_get("focus_teams_dnd") == "1":
+        from . import msgraph
+        db.kv_set("focus_teams_dnd", "0")
+        try:
+            await msgraph.clear_status()
+            extra = " Teams status is back to automatic."
+        except msgraph.GraphError as e:
+            extra = f" Could not reset the Teams status, so it stays Do not disturb until the planned end: {e}"
+    return _ok(f"Focus time ended. Any calendar block stays on the calendar.{extra}")
 
 
 # --- snooze ------------------------------------------------------------------------------------
 
-SNOOZABLE = ("reminder", "nudge", "meeting", "break", "followup", "focus", "wrapup")
+SNOOZABLE = ("reminder", "nudge", "meeting", "break", "water", "followup", "focus", "wrapup")
 
 
 @tool(
@@ -496,6 +526,32 @@ async def snooze(args: dict[str, Any]) -> dict[str, Any]:
     when = db.ts() + minutes * 60
     hub.announce_at(when, "reminder" if last["kind"] in ("meeting", "followup") else last["kind"], last["title"], last["body"])
     return _ok(f"Snoozed until {_hm(when)}: {last['body']}")
+
+
+# --- water ----------------------------------------------------------------------------------------
+
+def water_today() -> int:
+    """Glasses of water the user has told the pet about today."""
+    day, _, count = (db.kv_get("water_day") or "").partition(":")
+    return int(count) if day == config.now().date().isoformat() and count.isdigit() else 0
+
+
+@tool(
+    "log_water",
+    "Record that the user just drank water. Use it whenever they say they drank, had or finished a glass, cup or bottle "
+    "of water (including in reply to a water reminder). It restarts the water reminder clock and returns today's count.",
+    {"type": "object", "properties": {"glasses": {"type": "integer", "description": "How many glasses; default 1"}}},
+)
+async def log_water(args: dict[str, Any]) -> dict[str, Any]:
+    glasses = int(args.get("glasses") or 1)
+    if not 1 <= glasses <= 10:
+        return _err("Log 1 to 10 glasses at a time.")
+    total = water_today() + glasses
+    db.kv_set("water_day", f"{config.now().date().isoformat()}:{total}")
+    db.kv_set("water_last", str(db.ts()))
+    every = prefs.minutes("water_every_minutes")
+    nxt = f" Next reminder in about {every} minutes." if every else " Water reminders are off."
+    return _ok(f"Logged. {total} glass{'es' if total != 1 else ''} of water today.{nxt}")
 
 
 # --- usage ---------------------------------------------------------------------------------------
@@ -520,8 +576,9 @@ async def usage_report(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     "deliver_text",
-    "Give the user a text you wrote for them, such as a summary, a rephrasing or a draft: it is copied to their "
-    "clipboard and shown on the chat page. Speak only a short version yourself.",
+    "Give the user a text you wrote for them to use elsewhere, such as a summary, a rephrasing, a draft or meeting "
+    "minutes: it is copied to their clipboard and shown on the chat page. Speak only a short version yourself. Only "
+    "for texts they asked you to write; never for ordinary answers, replies or conversation, however long.",
     {"text": str},
 )
 async def deliver_text(args: dict[str, Any]) -> dict[str, Any]:
@@ -551,7 +608,7 @@ async def paste_text(args: dict[str, Any]) -> dict[str, Any]:
 
 
 TOOLS = [review_tasks, find_free_time, day_summary, week_summary, save_meeting_notes,
-         start_focus, stop_focus, snooze, usage_report, deliver_text, paste_text]
+         start_focus, stop_focus, snooze, log_water, usage_report, deliver_text, paste_text]
 
 
 # --- background jobs, run by the scheduler ------------------------------------------------------------
@@ -627,6 +684,7 @@ def focus_end() -> None:
     until = int(db.kv_get("focus_until") or 0)
     if until and until <= db.ts():
         db.kv_set("focus_until", "0")
+        db.kv_set("focus_teams_dnd", "0")  # Teams lets the status expire on its own at this time
         label = db.kv_get("focus_label") or ""
         hub.announce("focus", "Focus time over",
                      f"Your focus time{' on ' + label if label else ''} is over. Nice work. How did it go?")
@@ -646,3 +704,34 @@ def break_nudge() -> None:
     if db.ts() - hub.active_since >= every * 60:
         hub.active_since = db.ts()
         hub.announce("break", "Break", random.choice(_BREAKS))
+
+
+_WATER = [
+    "Time for some water. Grab a glass and take a few sips.",
+    "Quick reminder to drink some water. Your brain works better hydrated.",
+    "Water break! Have a glass, then carry on.",
+    "It's been a while since your last drink. How about some water?",
+]
+
+
+def water_nudge() -> None:
+    """Remind the user to drink water every water_every_minutes, only while they are at the PC and nothing is
+    holding messages back (quiet hours, a meeting, focus time). Saying they drank restarts the clock (log_water)."""
+    every = prefs.minutes("water_every_minutes")
+    if not every:
+        return
+    now = db.ts()
+    last = int(db.kv_get("water_last") or 0)
+    if not last:
+        db.kv_set("water_last", str(now))      # first run: start counting from now
+        return
+    if now - last < every * 60:
+        return
+    if hub.active_since is None or not hub.user_active() or prefs.in_quiet_hours() or hold_reason():
+        return
+    db.kv_set("water_last", str(now))
+    if db.one("SELECT 1 FROM outbox WHERE kind='break' AND created>=?", (now - 600,)):
+        return                                  # a break reminder just went out, and it already mentions water
+    glasses = water_today()
+    so_far = f" That would be glass number {glasses + 1} today." if glasses else ""
+    hub.announce("water", "Drink water", random.choice(_WATER) + so_far)

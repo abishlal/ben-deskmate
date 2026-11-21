@@ -173,7 +173,7 @@ def announce_at(when: int, kind: str, title: str, body: str) -> None:
 
 
 # Kinds of announcement that are useless once they are late, and how late (seconds) they may still be said.
-STALE_AFTER = {"meeting": 1800, "followup": 1800, "break": 900, "focus": 3600}
+STALE_AFTER = {"meeting": 1800, "followup": 1800, "break": 900, "water": 900, "focus": 3600}
 # While held back (in a meeting, in focus time), only these kinds get through.
 LET_THROUGH = {"meeting": {"reminder"}, "focus": {"reminder", "meeting", "focus"}}
 

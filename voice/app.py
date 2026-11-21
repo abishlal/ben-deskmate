@@ -34,6 +34,7 @@ STT_HINT = os.getenv("STT_HINT", "")
 WAKE_MODEL = os.getenv("WAKE_MODEL", "hey_jarvis")
 WAKE_THRESHOLD = float(os.getenv("WAKE_THRESHOLD", "0.5"))
 WAKE_FRAME = 1280  # 80 ms at 16 kHz, the step openWakeWord works in
+WAKE_GAP_S = 1.0   # audio resuming after a longer pause starts the detector afresh
 
 app = FastAPI(title="Pet voice")
 # What Whisper tends to "hear" in noise without speech.
@@ -132,16 +133,25 @@ async def wake(ws: WebSocket) -> None:
     await ws.accept()
     model = WakeModel(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
     pending = np.zeros(0, dtype=np.int16)
-    silent_until = 0.0
+    silent_until = last_audio = 0.0
     try:
         while True:
-            pending = np.concatenate([pending, np.frombuffer(await ws.receive_bytes(), dtype="<i2")])
+            data = await ws.receive_bytes()
+            # The pet stops sending audio while it records a request. The model still holds the last seconds it
+            # was given (often the wake phrase itself), so after a pause it would fire again on old audio.
+            if last_audio and time.monotonic() - last_audio > WAKE_GAP_S:
+                model.reset()
+                pending = np.zeros(0, dtype=np.int16)
+            last_audio = time.monotonic()
+            pending = np.concatenate([pending, np.frombuffer(data, dtype="<i2")])
             while pending.size >= WAKE_FRAME:
                 frame, pending = pending[:WAKE_FRAME], pending[WAKE_FRAME:]
                 score = max(model.predict(frame).values())
                 if score >= WAKE_THRESHOLD and time.monotonic() >= silent_until:
                     silent_until = time.monotonic() + 2.0       # one detection per utterance of the phrase
                     log.info("wake phrase detected (score %.2f)", score)
+                    model.reset()                                 # forget the phrase so it is never reported twice
+                    pending = np.zeros(0, dtype=np.int16)
                     await ws.send_json({"wake": round(float(score), 3)})
     except WebSocketDisconnect:
         pass

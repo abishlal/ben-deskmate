@@ -48,6 +48,17 @@ The one piece that cannot run in a container is the on-screen character, because
    - in a browser: http://127.0.0.1:47821/pet/ (chat and lists at http://127.0.0.1:47821/)
    - on the desktop: `cd client`, `npm install`, `npm start`
 
+   To run the desktop pet in the background, without a terminal attached, launch Electron's executable directly from `client`. The command returns immediately, and the pet keeps running after the terminal closes:
+
+   ```
+   # PowerShell
+   Start-Process "node_modules\electron\dist\electron.exe" -ArgumentList "."
+   # cmd
+   start "" node_modules\electron\dist\electron.exe .
+   ```
+
+   Ctrl+Alt+X only stops and hides the pet. To quit it completely, run `Stop-Process -Name electron` (PowerShell) or `taskkill /im electron.exe /f` (cmd). Either one closes every `electron.exe` process.
+
 ## Using it
 
 The pet stays out of sight. It comes up when you call it or when it has a reminder for you, and leaves a few seconds after the conversation ends.

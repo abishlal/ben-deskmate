@@ -162,6 +162,28 @@ def drop(ws: WebSocket) -> None:
         host_caps = {}
 
 
+_silent: tuple[bool, str] | None = None  # the silent-mode state the pets were last told
+
+
+def silent_message() -> dict:
+    on, reason = prefs.silent_state()
+    return {"type": "silent", "on": on, "reason": reason}
+
+
+async def sync_silent(announce: bool = False) -> bool:
+    """Tell the pets when silent mode starts or ends (a setting changed, the hotkey, or office hours began).
+    announce: the user just switched it, so the pet says so even if nothing changed. Returns True when it changed."""
+    global _silent
+    message = silent_message()
+    state = (message["on"], message["reason"])
+    changed = _silent is not None and state[0] != _silent[0]
+    if announce or state != _silent:
+        _silent = state
+        log.info("silent mode %s (%s)", "on" if state[0] else "off", state[1])
+        await broadcast({**message, "changed": changed, "announce": announce})
+    return changed
+
+
 def announce(kind: str, title: str, body: str) -> None:
     """Queue something for the pet to say. It is delivered now, or when a client next connects."""
     db.run("INSERT INTO outbox(kind, title, body, created) VALUES(?,?,?,?)", (kind, title, body, db.ts()))
@@ -196,7 +218,7 @@ async def flush_outbox() -> None:
                 continue
             if held and item["kind"] not in LET_THROUGH[held]:
                 continue
-            wav = await voice.speak(item["body"])
+            wav = None if prefs.silent_now() else await voice.speak(item["body"])
             message = {
                 "type": "notify", "id": item["id"], "kind": item["kind"],
                 "title": item["title"], "body": item["body"], "has_audio": wav is not None,

@@ -429,16 +429,13 @@ def focus_state() -> dict | None:
 @tool(
     "start_focus",
     "Start focus time: until it ends the pet stays silent except for reminders and meeting alerts, it can block "
-    "the time on the calendar, and it sets the user's Teams status to Do not disturb (cleared automatically at the "
-    "end). At the end it checks in with the user.",
+    "the time on the calendar. At the end it checks in with the user.",
     {
         "type": "object",
         "properties": {
             "minutes": {"type": "integer", "description": "5 to 240"},
             "label": {"type": "string", "description": "What the user is focusing on"},
             "block_calendar": {"type": "boolean", "description": "Put a 'Focus' appointment on the calendar; default true"},
-            "teams_dnd": {"type": "boolean", "description": "Set the user's Teams status to Do not disturb until focus "
-                                                           "ends; default from the focus_teams_dnd_enabled setting"},
         },
         "required": ["minutes"],
     },
@@ -465,25 +462,7 @@ async def start_focus(args: dict[str, Any]) -> dict[str, Any]:
             extra = " The time is blocked on the calendar."
         except hub.HostError as e:
             extra = f" Could not block the calendar: {e}"
-    extra += await _teams_dnd(args.get("teams_dnd"), minutes)
     return _ok(f"Focus time until {_hm(until)}.{extra}")
-
-
-async def _teams_dnd(wanted: bool | None, minutes: int) -> str:
-    """Set Teams to Do not disturb for the focus time; returns a sentence for the tool result."""
-    from . import msgraph
-    if wanted is None:
-        wanted = prefs.get("focus_teams_dnd_enabled") == "on"
-    if not wanted:
-        return ""
-    if not msgraph.signed_in():
-        return " Teams status not changed: Microsoft sign-in is not set up."
-    try:
-        await msgraph.set_dnd(minutes)
-    except msgraph.GraphError as e:
-        return f" Could not set Teams to Do not disturb: {e}"
-    db.kv_set("focus_teams_dnd", "1")
-    return " Teams is set to Do not disturb until then."
 
 
 @tool("stop_focus", "End focus time early.", {"type": "object", "properties": {}})
@@ -491,16 +470,7 @@ async def stop_focus(args: dict[str, Any]) -> dict[str, Any]:
     if not focus_state():
         return _ok("Focus time was not on.")
     db.kv_set("focus_until", "0")
-    extra = ""
-    if db.kv_get("focus_teams_dnd") == "1":
-        from . import msgraph
-        db.kv_set("focus_teams_dnd", "0")
-        try:
-            await msgraph.clear_status()
-            extra = " Teams status is back to automatic."
-        except msgraph.GraphError as e:
-            extra = f" Could not reset the Teams status, so it stays Do not disturb until the planned end: {e}"
-    return _ok(f"Focus time ended. Any calendar block stays on the calendar.{extra}")
+    return _ok("Focus time ended. Any calendar block stays on the calendar.")
 
 
 # --- snooze ------------------------------------------------------------------------------------
@@ -687,7 +657,6 @@ def focus_end() -> None:
     until = int(db.kv_get("focus_until") or 0)
     if until and until <= db.ts():
         db.kv_set("focus_until", "0")
-        db.kv_set("focus_teams_dnd", "0")  # Teams lets the status expire on its own at this time
         label = db.kv_get("focus_label") or ""
         hub.announce("focus", "Focus time over",
                      f"Your focus time{' on ' + label if label else ''} is over. Nice work. How did it go?")

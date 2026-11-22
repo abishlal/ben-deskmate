@@ -200,6 +200,7 @@ async def run() -> None:
             await nudge_microsoft_todos()
             await planner.refresh_calendar()
             await meeting_quiet()
+            await hub.sync_silent()
             await nudge_meetings()
             planner.meeting_followups()
             planner.focus_end()

@@ -1,4 +1,4 @@
-"""Microsoft Graph access for To Do, OneNote, the calendar and Teams presence, using the user's own delegated sign-in.
+"""Microsoft Graph access for To Do, OneNote and the calendar, using the user's own delegated sign-in.
 
 Sign in once (device code; the token cache is kept in the data volume):
     docker compose exec server python -m app.msgraph login
@@ -16,9 +16,6 @@ import msal
 from . import config
 
 SCOPES = ["Tasks.ReadWrite", "Notes.ReadWrite", "Calendars.ReadWrite", "User.Read"]
-# Asked for at sign-in, but requested on its own afterwards so an older sign-in without it keeps
-# working for everything else (only the Teams status change is skipped until the next login).
-PRESENCE_SCOPES = ["Presence.ReadWrite"]
 CACHE_FILE = config.DATA_DIR / "msal_cache.json"
 _http = httpx.AsyncClient(base_url="https://graph.microsoft.com/v1.0", timeout=30)
 
@@ -67,7 +64,7 @@ def signed_in() -> bool:
     return account() is not None
 
 
-def _access_token(scopes: list[str] | None = None) -> str | None:
+def _access_token() -> str | None:
     if not configured():
         return None
     cache = _load_cache()
@@ -75,19 +72,15 @@ def _access_token(scopes: list[str] | None = None) -> str | None:
     accounts = app.get_accounts()
     if not accounts:
         return None
-    result = app.acquire_token_silent(scopes or SCOPES, account=accounts[0])
+    result = app.acquire_token_silent(SCOPES, account=accounts[0])
     _save_cache(cache)
     return result.get("access_token") if result else None
 
 
 async def call(method: str, path: str, *, json=None, content: str | None = None,
-               headers: dict | None = None, params: dict | None = None, text: bool = False,
-               scopes: list[str] | None = None):
+               headers: dict | None = None, params: dict | None = None, text: bool = False):
     """One Graph request. Returns parsed JSON, or the raw body when text=True."""
-    token = await asyncio.to_thread(_access_token, *([scopes] if scopes else []))
-    if not token and scopes and signed_in():
-        raise GraphError("The Microsoft sign-in does not include this permission yet. The user needs to sign in "
-                         "again: docker compose exec server python -m app.msgraph login")
+    token = await asyncio.to_thread(_access_token)
     if not token:
         raise GraphError("Not signed in to Microsoft. The user needs to run: "
                          "docker compose exec server python -m app.msgraph login")
@@ -107,18 +100,6 @@ async def call(method: str, path: str, *, json=None, content: str | None = None,
     return r.json() if r.content else {}
 
 
-async def set_dnd(minutes: int) -> None:
-    """Set the user's Teams status to Do not disturb; Teams clears it by itself after `minutes`."""
-    await call("POST", "/me/presence/setUserPreferredPresence", scopes=PRESENCE_SCOPES,
-               json={"availability": "DoNotDisturb", "activity": "DoNotDisturb",
-                     "expirationDuration": f"PT{minutes}M"})
-
-
-async def clear_status() -> None:
-    """Remove a status set by set_dnd, so Teams goes back to showing the user's status automatically."""
-    await call("POST", "/me/presence/clearUserPreferredPresence", scopes=PRESENCE_SCOPES, json={})
-
-
 # --- command line ------------------------------------------------------------
 
 def _login() -> int:
@@ -127,7 +108,7 @@ def _login() -> int:
         return 1
     cache = _load_cache()
     app = _app(cache)
-    flow = app.initiate_device_flow(scopes=SCOPES + PRESENCE_SCOPES)
+    flow = app.initiate_device_flow(scopes=SCOPES)
     if "user_code" not in flow:
         print("Could not start sign-in:", flow.get("error_description") or flow)
         return 1

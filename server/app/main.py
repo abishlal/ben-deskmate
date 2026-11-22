@@ -92,6 +92,7 @@ async def status() -> dict:
                    "history_search": "full text" if db.HAS_FTS else "keywords"},
         "usage": {"today": db.usage_today(), "limit": config.DAILY_TURN_LIMIT, "days": db.usage_days(14)},
         "settings": {k: prefs.get(k) for k in prefs.DEFAULTS},
+        "silent": dict(zip(("on", "reason"), prefs.silent_state())),
         "heard": list(_heard),
     }
 
@@ -99,6 +100,44 @@ async def status() -> dict:
 @app.get("/status")
 async def status_page() -> FileResponse:
     return FileResponse(WEB / "status.html")
+
+
+@app.get("/settings")
+async def settings_page() -> FileResponse:
+    return FileResponse(WEB / "settings.html")
+
+
+def _settings() -> dict:
+    return {"name": config.PET_NAME, "values": {k: prefs.get(k) for k in prefs.DEFAULTS},
+            "descriptions": prefs.DESCRIPTIONS, "silent": dict(zip(("on", "reason"), prefs.silent_state()))}
+
+
+@app.get("/api/settings")
+async def get_settings() -> dict:
+    return _settings()
+
+
+@app.put("/api/settings")
+async def save_settings(request: Request) -> dict:
+    """Save the settings page. Each value is checked on its own; the ones that fail come back in "errors"."""
+    # Any web page can send requests to localhost: only our own pages may change settings.
+    if request.headers.get("origin") not in config.ALLOWED_ORIGINS or "json" not in request.headers.get("content-type", ""):
+        raise HTTPException(403, "Not allowed.")
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Send an object of settings.")
+    errors = {}
+    for key, value in data.items():
+        if key not in prefs.DEFAULTS:
+            errors[key] = "Unknown setting."
+            continue
+        if value != prefs.get(key):
+            try:
+                prefs.put(key, str(value))
+            except ValueError as e:
+                errors[key] = str(e)
+    await hub.sync_silent()
+    return {**_settings(), "errors": errors}
 
 
 @app.get("/api/overview")
@@ -193,6 +232,7 @@ async def _speech_worker(ws: WebSocket, queue: asyncio.Queue[str | None]) -> Non
 
 async def handle_text(ws: WebSocket, text: str, speak: bool, log_as: str | None = None) -> None:
     await hub.send(ws, {"type": "state", "state": "thinking"})
+    speak = speak and not prefs.silent_now()   # silent mode: the reply only goes to the speech bubble
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     worker = asyncio.create_task(_speech_worker(ws, queue)) if speak else None
     pending = ""
@@ -238,6 +278,48 @@ async def handle_text(ws: WebSocket, text: str, speak: bool, log_as: str | None 
 # Saying one of these instead of a request sends the pet away without asking Claude.
 _DISMISS = re.compile(r"^\W*(?:ok(?:ay)?\W+)?(?:stop(?: talking)?|never ?mind|shut up|be quiet|quiet|that'?s (?:all|it)|that is all|"
                       r"nothing|no thanks|thanks|thank you(?: very much)?|go away|dismiss|cancel that)\W*$", re.IGNORECASE)
+
+
+# "Silent mode on/off", "go silent", "you can talk again": switched at once, without asking Claude.
+_SILENT_OFF = re.compile(
+    r"^\W*(?:(?:ok(?:ay)?|please|hey)\W+)*(?:"
+    r"(?:turn|switch|put|set)\W+off\W+(?:the\W+)?silent\W+mode|"
+    r"(?:turn|switch|put|set)\W+(?:the\W+)?silent\W+mode\W+off|silent\W+mode\W+off|"
+    r"(?:disable|stop|end|exit|leave|cancel|quit)\W+(?:the\W+)?silent\W+mode|"
+    r"(?:you\W+can\W+)?(?:talk|speak)\W+(?:again|out\W+loud|aloud)|(?:start|resume)\W+(?:talking|speaking)(?:\W+again)?|"
+    r"unmute(?:\W+yourself)?)(?:\W+(?:now|please))?\W*$", re.IGNORECASE)
+_SILENT_ON = re.compile(
+    r"^\W*(?:(?:ok(?:ay)?|please|hey)\W+)*(?:"
+    r"(?:(?:turn|switch|put|set|go)(?:\W+(?:on|to|into|in))?\W+|enable\W+|start\W+|activate\W+|enter\W+|use\W+)?"
+    r"(?:the\W+)?silent\W+mode(?:\W+on)?|(?:go|be|stay|keep)\W+silent)(?:\W+(?:now|please))?\W*$", re.IGNORECASE)
+
+
+def silent_command(text: str) -> bool | None:
+    """True for "silent mode on", False for "silent mode off", None when the text is something else."""
+    if _SILENT_OFF.match(text):
+        return False
+    if _SILENT_ON.match(text):
+        return True
+    return None
+
+
+def silent_reply(on: bool, reason: str) -> str:
+    today = "today" in reason
+    if on:
+        return ("Silent mode is on" + (" for today" if today else "") +
+                ". I'll show my messages here instead of speaking.")
+    return "Okay, I'll talk again" + (" for the rest of today." if today else ".")
+
+
+async def handle_silent_command(ws: WebSocket, on: bool) -> None:
+    """A spoken or typed "silent mode on/off": switch it and answer like a short turn (aloud only when turning it off)."""
+    on, reason = prefs.set_silent(on)
+    await hub.sync_silent()
+    reply = silent_reply(on, reason)
+    await hub.send(ws, {"type": "reply_delta", "text": reply})
+    if not on and (wav := await voice.speak(reply)):
+        await hub.send(ws, {"type": "audio", "text": reply}, wav)
+    await hub.send(ws, {"type": "reply_done", "text": reply})
 
 
 # --- "summarise this" / "rephrase this": listen until the user says stop, then hand the text to Claude ---
@@ -423,6 +505,10 @@ async def handle_audio(ws: WebSocket, wav: bytes, need_wake: bool, conn: dict) -
     if _DISMISS.match(text):
         await hub.send(ws, {"type": "dismissed", "text": text})
         return
+    if (on := silent_command(text)) is not None:
+        await hub.send(ws, {"type": "transcript", "text": text})
+        await handle_silent_command(ws, on)
+        return
     if (task := capture_request(text)) is not None:
         await hub.send(ws, {"type": "transcript", "text": text})
         await begin_capture(ws, conn, task)
@@ -440,7 +526,8 @@ async def websocket(ws: WebSocket) -> None:
     await ws.accept()
     hub.clients.add(ws)
     await hub.send(ws, {"type": "hello", "name": config.PET_NAME, "voice": await voice.healthy(),
-                        "wake_engine": await voice.wake_engine(), "meeting_quiet": scheduler.meeting_quiet_now()})
+                        "wake_engine": await voice.wake_engine(), "meeting_quiet": scheduler.meeting_quiet_now(),
+                        "silent": prefs.silent_now()})
     flush = asyncio.create_task(hub.flush_outbox())
     turn: asyncio.Task | None = None
     audio_meta: dict = {}
@@ -494,7 +581,14 @@ async def websocket(ws: WebSocket) -> None:
                 continue
             kind = data.get("type")
             if kind == "text" and str(data.get("text", "")).strip():
-                await start(handle_text(ws, str(data["text"]).strip(), bool(data.get("speak"))))
+                typed = str(data["text"]).strip()
+                if (on := silent_command(typed)) is not None:
+                    await start(handle_silent_command(ws, on))
+                else:
+                    await start(handle_text(ws, typed, bool(data.get("speak"))))
+            elif kind == "silent_toggle":   # the hotkey or the tray menu
+                prefs.set_silent(not prefs.silent_now() if data.get("on") is None else bool(data["on"]))
+                await hub.sync_silent(announce=True)
             elif kind == "audio":
                 audio_meta = data
             elif kind == "interrupt":

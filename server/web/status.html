@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<header><h1 id="title">Status</h1><span id="time">Loading…</span><a href="/">Chat and lists</a></header>
+<header><h1 id="title">Status</h1><span id="time">Loading…</span><a href="/">Chat and lists</a><a href="/settings" style="margin-left:0">Settings</a></header>
 <main>
   <section><h2>Health</h2><div id="health"></div></section>
   <section><h2>Microphone and pet</h2><div id="pet"></div></section>
@@ -48,7 +48,7 @@
     <div class="bars" id="bars"></div>
     <p class="muted" style="margin:8px 0 0;font-size:12px">Cost is the API-equivalent estimate the Claude CLI reports; a Claude subscription is not billed per turn.</p>
   </section>
-  <section><h2>Settings</h2><div id="settings"></div></section>
+  <section><h2>Settings <a href="/settings" style="text-transform:none;letter-spacing:0;margin-left:6px">change</a></h2><div id="settings"></div></section>
   <section><h2>Heard while waiting for the wake word</h2><ul id="heard"></ul></section>
 </main>
 <script>
@@ -102,6 +102,7 @@ function render(d) {
   $('now').innerHTML = rows([
     ['Focus time', d.focus ? `until ${esc(d.focus.until)}${d.focus.label ? ' · ' + esc(d.focus.label) : ''}` : 'off'],
     ['Meeting now', d.meeting_now ? esc(d.meeting_now) : 'none'],
+    ['Silent mode', d.silent ? (d.silent.on ? `silent · ${esc(d.silent.reason)}` : 'speaking') : '—'],
     ['Holding back messages', d.held_back ? flag(false, '', esc(d.held_back), true) : 'no'],
     ['Last keyboard or mouse input', d.user_idle_s == null ? 'unknown' : ago(Math.round(d.user_idle_s))],
     ['Working without a break', d.working_for_min == null ? '—' : `${d.working_for_min} min`],

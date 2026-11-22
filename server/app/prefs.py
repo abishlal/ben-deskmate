@@ -23,9 +23,10 @@ DEFAULTS = {
     "meeting_quiet_enabled": os.getenv("PET_MEETING_QUIET", "on"),
     "break_every_minutes": os.getenv("PET_BREAK_EVERY_MINUTES", "0"),
     "water_every_minutes": os.getenv("PET_WATER_EVERY_MINUTES", "60"),
-    "focus_teams_dnd_enabled": os.getenv("PET_FOCUS_TEAMS_DND", "on"),
     "stale_task_days": os.getenv("PET_STALE_TASK_DAYS", "14"),
     "writing_style": "",
+    "silent_mode": os.getenv("PET_SILENT_MODE", "off"),
+    "office_days": os.getenv("PET_OFFICE_DAYS", "mon,tue,wed,thu,fri"),
 }
 DESCRIPTIONS = {
     "briefing_enabled": "morning briefing on or off",
@@ -44,11 +45,13 @@ DESCRIPTIONS = {
     "break_every_minutes": "suggest a stretch break after this many minutes of continuous work; 0 turns it off",
     "water_every_minutes": "remind the user to drink water when this many minutes have passed since their last drink "
                            "or the last water reminder, while they are at the PC; 0 turns it off",
-    "focus_teams_dnd_enabled": "set the user's Teams status to Do not disturb during focus time "
-                               "(needs the Microsoft sign-in), on or off",
     "stale_task_days": "a task open longer than this many days counts as stale in task reviews",
     "writing_style": "how the user describes their own writing tone, used when rephrasing selected text (Ctrl+Alt+R); "
                      "free text, for example 'direct and polite, a bit informal with my team'",
+    "silent_mode": "silent mode: the pet shows its messages in the speech bubble instead of speaking them. "
+                   "off, on (always silent) or office_days (silent during work hours on the office days)",
+    "office_days": "the weekdays the user works from the office, for silent_mode office_days, "
+                   "comma-separated, for example mon,wed,thu",
 }
 
 
@@ -69,17 +72,28 @@ def put(key: str, value: str) -> str:
     elif key.endswith("_minutes"):
         if not value.isdigit() or int(value) > 240:
             raise ValueError("Use a whole number of minutes from 0 to 240.")
-    elif key.endswith("_days"):
+    elif key == "stale_task_days":
         if not value.isdigit() or not 1 <= int(value) <= 365:
             raise ValueError("Use a whole number of days from 1 to 365.")
     elif key == "writing_style":
         if len(value) > 1000:
             raise ValueError("Keep the style description under 1000 characters.")
+    elif key == "silent_mode":
+        value = value.lower().replace(" ", "_")
+        if value not in SILENT_MODES:
+            raise ValueError("Use off, on or office_days.")
+    elif key == "office_days":
+        days = [d[:3] for d in re.split(r"[\s,;/]+", value.lower()) if d]
+        if not days or any(d not in WEEKDAYS for d in days):
+            raise ValueError("List weekdays like mon,wed,thu.")
+        value = ",".join(d for d in WEEKDAYS if d in days)
     elif key.endswith("_enabled"):
         if value.lower() not in ("on", "off"):
             raise ValueError("Use on or off.")
         value = value.lower()
     db.kv_set(f"pref:{key}", value)
+    if key in ("silent_mode", "office_days"):
+        db.kv_set(_SILENT_OVERRIDE, "")  # a new rule replaces a switch made for today
     return value
 
 
@@ -106,6 +120,48 @@ def in_quiet_hours(at: datetime | None = None) -> bool:
 def in_work_hours(at: datetime | None = None) -> bool:
     at = at or config.now()
     return at.weekday() < 5 and clock("work_start") <= at.time() < clock("work_end")
+
+
+# --- silent mode: show messages in the bubble instead of speaking them ---
+SILENT_MODES = ("off", "on", "office_days")
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# The hotkey or "silent mode on/off" during an office day changes only today: "on:2026-11-23" or "off:2026-11-23".
+_SILENT_OVERRIDE = "silent_override"
+
+
+def _office_hours(at: datetime) -> bool:
+    return WEEKDAYS[at.weekday()] in get("office_days").split(",") and clock("work_start") <= at.time() < clock("work_end")
+
+
+def silent_state(at: datetime | None = None) -> tuple[bool, str]:
+    """Whether the pet must stay silent now, and why (shown on the settings page and in the bubble)."""
+    at = at or config.now()
+    mode = get("silent_mode")
+    if mode == "on":
+        return True, "silent mode is on"
+    if mode != "office_days":
+        return False, "silent mode is off"
+    switched, _, day = (db.kv_get(_SILENT_OVERRIDE) or "").partition(":")
+    if switched and day == at.date().isoformat():
+        return switched == "on", f"switched {switched} for today"
+    if _office_hours(at):
+        return True, "an office day, during work hours"
+    return False, "outside office hours"
+
+
+def silent_now() -> bool:
+    return silent_state()[0]
+
+
+def set_silent(on: bool) -> tuple[bool, str]:
+    """The hotkey or a voice command. With office_days it changes only today; otherwise it switches the mode."""
+    if get("silent_mode") == "office_days":
+        db.kv_set(_SILENT_OVERRIDE, "")
+        if silent_now() != on:
+            db.kv_set(_SILENT_OVERRIDE, f"{'on' if on else 'off'}:{config.now().date().isoformat()}")
+    else:
+        put("silent_mode", "on" if on else "off")
+    return silent_state()
 
 
 def describe() -> str:

@@ -76,6 +76,7 @@ The pet stays out of sight. It comes up when you call it or when it has a remind
 | Snooze | Right after a reminder or alert: "snooze that", "remind me again in ten minutes". |
 | Type | Tray menu → Type a message, or double-click the pet while it is up. |
 | Pause it | Ctrl+Alt+P, or tray menu → Pause. It stops listening for the wake word and stops speaking; reminders still appear as a bubble and a Windows notification. Press again to resume. |
+| Silent mode | For the office: it shows everything in the speech bubble instead of speaking, and the bubble stays up long enough to read. Press Ctrl+Alt+M (or tray menu → Silent mode), say "Hey Jarvis, silent mode on" / "silent mode off" (or "go silent", "you can talk again"), or set it on the Settings page (tray menu → Settings): off, on, or office days, which turns it on by itself during work hours on the weekdays you pick. On an office day the hotkey and voice switch it only for that day. The wake word still works. |
 | Calls | While another app is using the microphone (a Teams call, a recording), it goes quiet in the same way on its own. Tray menu → Go quiet automatically during calls turns this off. The hotkey still calls it during a call. |
 | Meetings | While a meeting on your Outlook calendar is in progress (shown as busy), it also goes quiet, and holds back everything except reminders until the meeting ends. "Stop going quiet in meetings" turns this off. |
 | Status | Tray menu → Status and usage, or http://127.0.0.1:47821/status: microphone, wake word, desktop bridge and each app's last call, what is being held back, and turns and cost per day. |
@@ -149,10 +150,7 @@ Things to say:
   offers to take notes; tell it the notes and action items and it saves one page (in a "Meetings" section if you have
   one) and adds your own action items to To Do. Other people's items stay on the page only.
 - **Focus time.** "Focus on the report for 45 minutes." It blocks the time on your calendar and stays silent except
-  for reminders and meeting alerts, then checks in at the end. "Stop focus" ends it early. With the Microsoft sign-in
-  it also sets your Teams status to Do not disturb until the focus time ends (Teams clears it by itself; stopping
-  early resets it right away). "Don't change my Teams status during focus" turns that off. If you signed in before
-  this was added, sign in again once to grant the Teams presence permission.
+  for reminders and meeting alerts, then checks in at the end. "Stop focus" ends it early.
 - **Breaks.** Off by default. "Remind me to take a break every hour" sets it; it counts only time you are actually at
   the keyboard (five minutes away resets it) and only in working hours.
 - **Water.** On by default: every 60 minutes at the PC it reminds you to drink some water. Tell it "I just had a glass"
@@ -252,8 +250,7 @@ instead of its local database. Reminders and memory stay local. Signing out swit
    - Supported account types: accounts in this organizational directory only.
    - No redirect URI.
    - After creating it: Authentication → Advanced settings → Allow public client flows → Yes.
-   - API permissions → Add → Microsoft Graph → Delegated: `Tasks.ReadWrite`, `Notes.ReadWrite`, `Calendars.ReadWrite`, `User.Read`, `Presence.ReadWrite`
-     (the last one lets focus time set your Teams status to Do not disturb).
+   - API permissions → Add → Microsoft Graph → Delegated: `Tasks.ReadWrite`, `Notes.ReadWrite`, `Calendars.ReadWrite`, `User.Read`.
      Nothing for mail or contacts.
 2. Put the Application (client) ID in `.env` as `MS_CLIENT_ID`, and optionally your Directory (tenant) ID as `MS_TENANT_ID`, then `docker compose up -d`.
 3. Sign in. The command prints a code and a link; finish in your browser:

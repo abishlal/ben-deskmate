@@ -86,46 +86,6 @@ async def main() -> None:
     assert db.one("SELECT 1 FROM outbox WHERE kind='focus' AND body LIKE '%report is over%'")
     assert planner.hold_reason() is None
 
-    # Focus time sets Teams to Do not disturb through Graph, and stopping early clears it.
-    import json as _json
-    import httpx
-    from app import msgraph
-    sent: list[tuple[str, dict]] = []
-
-    def graph(request: httpx.Request) -> httpx.Response:
-        assert request.headers["authorization"] == "Bearer fake"
-        sent.append((request.url.path.removeprefix("/v1.0"), _json.loads(request.content or b"{}")))
-        return httpx.Response(200)
-
-    real = (msgraph._http, msgraph._access_token, msgraph.signed_in)
-    msgraph._http = httpx.AsyncClient(base_url="https://graph.microsoft.com/v1.0", transport=httpx.MockTransport(graph))
-    msgraph._access_token = lambda *scopes: "fake"
-    msgraph.signed_in = lambda: True
-    out = await call(planner.start_focus, minutes=30, label="deck", block_calendar=False)
-    assert "Do not disturb" in out, out
-    assert sent == [("/me/presence/setUserPreferredPresence",
-                     {"availability": "DoNotDisturb", "activity": "DoNotDisturb", "expirationDuration": "PT30M"})], sent
-    out = await call(planner.stop_focus)
-    assert "back to automatic" in out and sent[-1][0] == "/me/presence/clearUserPreferredPresence", (out, sent)
-    out = await call(planner.stop_focus)
-    assert len(sent) == 2, sent                                  # nothing to clear when focus is already off
-    prefs.put("focus_teams_dnd_enabled", "off")
-    await call(planner.start_focus, minutes=10, block_calendar=False)
-    await call(planner.stop_focus)
-    assert len(sent) == 2, sent                                  # the setting turns it off
-    prefs.put("focus_teams_dnd_enabled", "on")
-    msgraph._access_token = lambda *scopes: None if scopes else "fake"   # an older sign-in without the scope
-    out = await call(planner.start_focus, minutes=10, block_calendar=False)
-    assert "sign in again" in out and not planner.hold_reason() is None, out
-    await call(planner.stop_focus)
-    assert len(sent) == 2, sent                                  # failed to set, so nothing to clear
-    msgraph.signed_in = lambda: False
-    out = await call(planner.start_focus, minutes=10, block_calendar=False)
-    assert "sign-in is not set up" in out, out
-    await call(planner.stop_focus)
-    msgraph._http, msgraph._access_token, msgraph.signed_in = real
-    print("teams do not disturb ok")
-
     # A meeting on the calendar: quiet now, a follow-up after it ends.
     planner._calendar = [ev("Standup", now - 600, now + 600), ev("Retro", now - 3000, now - 120),
                          ev("Lunch", now - 600, now + 600, meeting=False)]

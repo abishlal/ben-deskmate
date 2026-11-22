@@ -36,6 +36,8 @@ const PAUSE_HOTKEY = readSetting('PET_HOTKEY_PAUSE', KEY, 'Control+Alt+P');
 const DICTATE_HOTKEY = readSetting('PET_HOTKEY_DICTATE', KEY, 'Control+Alt+D');
 const CAPTURE_HOTKEY = readSetting('PET_HOTKEY_SUMMARISE', KEY, 'Control+Alt+S');
 const REPHRASE_HOTKEY = readSetting('PET_HOTKEY_REPHRASE', KEY, 'Control+Alt+R');
+// Silent mode on or off: messages in the speech bubble instead of spoken (also on the settings page, or by voice).
+const SILENT_HOTKEY = readSetting('PET_HOTKEY_SILENT', KEY, 'Control+Alt+M');
 const hotkeyOk = {};
 const keyLabel = (k) => hotkeyOk[k] === false ? 'shortcut taken by another app'
   : k.replace('Control', 'Ctrl').replace('CommandOrControl', 'Ctrl').replaceAll('+', ' + ');
@@ -54,7 +56,7 @@ function logLine(...parts) {
 }
 process.on('uncaughtException', (e) => logLine('uncaught exception:', e && e.stack || e));
 process.on('unhandledRejection', (e) => logLine('unhandled rejection:', e && e.stack || e));
-let state = { handsfree: true, muted: false, stay: false, paused: false, autoPause: true, inCall: false };
+let state = { handsfree: true, muted: false, stay: false, paused: false, autoPause: true, inCall: false, silent: false };
 // A pause is meant for a meeting or a call, so it lifts itself when you come back from a break
 // (twenty minutes without keyboard or mouse, or the PC asleep that long), and after three hours at most.
 const AWAY_RESUMES_S = 20 * 60, PAUSE_MAX_MS = 3 * 3600 * 1000;
@@ -380,12 +382,15 @@ function buildMenu() {
     { type: 'separator' },
     { label: `Listen for the wake word ("${WAKE_PHRASE}")`, type: 'checkbox', checked: state.handsfree,
       click: (item) => { state.handsfree = item.checked; send('handsfree', item.checked); } },
+    { label: `Silent mode: show messages, don't speak  (${keyLabel(SILENT_HOTKEY)})`, type: 'checkbox', checked: state.silent,
+      click: (item) => { item.checked = state.silent; send('silent'); } },
     { label: 'Mute voice', type: 'checkbox', checked: state.muted,
       click: (item) => { state.muted = item.checked; send('mute', item.checked); } },
     { label: 'Stay on screen (otherwise it comes only when called)', type: 'checkbox', checked: state.stay,
       click: (item) => { state.stay = item.checked; send('stay', item.checked); } },
     { type: 'separator' },
     { label: 'Open chat and lists', click: () => shell.openExternal(ORIGIN + '/') },
+    { label: 'Settings', click: () => shell.openExternal(ORIGIN + '/settings') },
     { label: 'Status and usage', click: () => shell.openExternal(ORIGIN + '/status') },
     { label: 'Start with Windows', type: 'checkbox', checked: login.openAtLogin,
       click: (item) => setAutostart(item.checked) },
@@ -453,7 +458,7 @@ else app.whenReady().then(() => {
   tray.on('click', () => send('talk'));
   buildMenu();
   for (const [key, action] of [[HOTKEY, () => send('talk')], [DISMISS_HOTKEY, () => dismiss()], [PAUSE_HOTKEY, () => togglePause()],
-    [DICTATE_HOTKEY, () => send('dictate')], [CAPTURE_HOTKEY, () => send('capture')],
+    [DICTATE_HOTKEY, () => send('dictate')], [CAPTURE_HOTKEY, () => send('capture')], [SILENT_HOTKEY, () => send('silent')],
     [REPHRASE_HOTKEY, () => { rephraseSelection().catch((e) => logLine('rephrase failed:', e && e.stack || e)); }]]) {
     try { hotkeyOk[key] = globalShortcut.register(key, action); } catch { hotkeyOk[key] = false; }
   }
@@ -521,6 +526,7 @@ else app.whenReady().then(() => {
     if (!e.senderFrame || !e.senderFrame.url.startsWith(ORIGIN + '/pet/')) return { ok: false, error: 'Not allowed from this page.' };
     return hostCall(op, args);
   });
+  ipcMain.on('pet:silent', (_e, on) => { if (state.silent !== !!on) { state.silent = !!on; if (tray) buildMenu(); } });
   ipcMain.on('pet:ready', (_e, settings) => {
     state = { ...state, ...settings }; buildMenu();
     sendDisplays();

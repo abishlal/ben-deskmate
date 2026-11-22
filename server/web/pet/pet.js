@@ -29,6 +29,7 @@
   let inCall = false;            // another app is using the microphone (a Teams call, a recording)
   let inMeeting = false;         // a meeting on the calendar is happening now (the server says so)
   let skipAudio = 0;             // announcement clips to drop while it must stay silent
+  let silent = false;            // silent mode (settings page, Ctrl+Alt+M, "silent mode on"): messages in the bubble only
   let discard = false;           // a reply was interrupted: drop what is still arriving from it
   let dictating = false;         // dictation mode: speech is typed into the active app, not sent to the assistant
   let idleS = null;              // seconds since the last keyboard or mouse input (from the desktop shell)
@@ -160,6 +161,8 @@
     if (replyText) bubbleText.append(document.createTextNode(replyText));
     bubble.hidden = !(youText || replyText) && typeForm.hidden;
   }
+  /** How long a message stays up in silent mode: long enough to read it (about 200 words a minute). */
+  const readMs = (text) => Math.min(60000, Math.max(LINGER_MS, 2500 + String(text || '').length * 70));
   function say(text, ms = 0) { youText = ''; replyText = text; render(); hideLater(ms); }
   function hideLater(ms) {
     clearTimeout(hideTimer);
@@ -181,7 +184,7 @@
   }
 
   function enqueueAudio(buf) {
-    if (settings.muted) return;
+    if (settings.muted || silent) return;
     playQueue.push(buf);
     if (!playing) playNext();
   }
@@ -223,11 +226,14 @@
   function finishTurn() {
     if (mode === 'listen' && !followUp) return;
     if (!connected) { setMode('sleep'); return; }
-    if (voiceTurn && micReady && typeForm.hidden && !quiet()) {
+    if (voiceTurn && micReady && typeForm.hidden && !quiet() && !silent) {
       resetVad(); listenStart = performance.now(); followUp = true;
       setMode('listen');                           // the reply stays in the bubble while it listens
     } else {
-      setMode('ambient'); hideLater(LINGER_MS);
+      // Silent mode: the bubble is the only way the reply reaches you, so it stays up long enough to read.
+      const ms = silent ? readMs(replyText) : LINGER_MS;
+      setMode('ambient'); hideLater(ms);
+      if (silent && !settings.stay) leaveSoon(ms + 500);
     }
   }
 
@@ -295,7 +301,7 @@
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: 'status', mic: micAlive(), mic_reopens: micReopens, mic_level: +micPeak.toFixed(4),
         wake_word: settings.handsfree, paused, in_call: inCall, in_meeting: inMeeting, dictating, capturing, idle_s: idleS,
-        muted: settings.muted, mode, present, shell: !!shell }));
+        muted: settings.muted, silent, mode, present, shell: !!shell }));
     }
     micPeak = 0;
     if (capturing && performance.now() - captureStarted > CAPTURE_MAX_MS) endCapture();   // fifteen minutes at most
@@ -551,7 +557,7 @@
   /** A short two-note sound: rising when it starts listening, falling when it gives up. */
   let lastChime = 0;
   function chime(down = false) {
-    if (settings.muted) return;
+    if (settings.muted || silent) return;
     lastChime = performance.now();
     try {
       const c = audio(), t = c.currentTime;
@@ -635,6 +641,15 @@
     if (mode === 'ambient' || mode === 'sleep') leaveSoon(3500);
   }
   function setInCall(on) { inCall = on; if (on) goQuiet(); }
+  function setSilent(on) {
+    silent = on;
+    if (on) { stopSpeaking(); if (mode === 'listen' && followUp) { followUp = false; setMode('ambient'); } }
+    shell && shell.silent && shell.silent(on);   // the tray menu shows it
+  }
+  function toggleSilent() {
+    if (connected && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'silent_toggle' }));
+    else { arrive(); say("I'm not connected to my server, so I can't switch silent mode.", 4000); leaveSoon(4500); }
+  }
 
   function setStay(on) {
     settings.stay = on; store.set('stay', on ? '1' : '0');
@@ -664,6 +679,7 @@
         case 'vad': heardSpeech = !!m.speech; vadFresh = true; vadWorks = true; break;
         case 'hello':
           connected = true; wakeEngine = !!m.wake_engine; inMeeting = !!m.meeting_quiet; setMode('ambient');
+          setSilent(!!m.silent);
           ws.send(JSON.stringify({ type: 'client', host: !!(shell && shell.hostCall) }));
           if (settings.handsfree) ensureMic();
           if (!m.voice) { arrive(); say('My voice service is offline, so I can only type for now.', 6000); leaveSoon(7000); }
@@ -685,8 +701,21 @@
           shell && shell.notify(m.title, m.body);
           voiceTurn = settings.handsfree;      // so "snooze that ten minutes" works straight after
           if (m.has_audio && quiet()) skipAudio++;   // paused or on a call: show it, do not say it aloud
-          if (!m.has_audio || settings.muted || quiet()) { if (mode === 'ambient' || mode === 'sleep') { setMode('ambient'); leaveSoon(12000); } hideLater(12000); }
+          if (!m.has_audio || settings.muted || quiet()) {
+            const ms = silent ? Math.max(12000, readMs(m.body)) : 12000;
+            if (mode === 'ambient' || mode === 'sleep') { setMode('ambient'); leaveSoon(ms); }
+            hideLater(ms);
+          }
           else if (mode === 'ambient' || mode === 'sleep') setMode('talk');
+          break;
+        case 'silent':   // silent mode switched: by the hotkey, a setting, or office hours starting or ending
+          setSilent(!!m.on);
+          if ((m.announce || m.changed) && (mode === 'ambient' || mode === 'sleep')) {
+            const text = m.on ? "Silent mode on. I'll show my messages here instead of speaking."
+              : "Silent mode off. I'll talk again.";
+            arrive(); say(text, 4000);
+            if (!settings.stay) leaveSoon(4500);
+          }
           break;
         case 'meeting_quiet':   // a calendar meeting started or ended
           inMeeting = !!m.on;
@@ -977,6 +1006,7 @@
       else if (cmd === 'type') openTypeBox();
       else if (cmd === 'handsfree') setHandsfree(!!value);
       else if (cmd === 'mute') setMuted(!!value);
+      else if (cmd === 'silent') toggleSilent();
       else if (cmd === 'stay') setStay(!!value);
       else if (cmd === 'pause') setPaused(!!value);
       else if (cmd === 'incall') setInCall(!!value);
@@ -1002,8 +1032,8 @@
 
   // Hooks for automated checks and the browser preview.
   window.__pet = {
-    state: () => ({ screen: homeId, mode, connected, present, followUp, paused, inCall, inMeeting, dictating, capturing, wakeEngine, micReady, x: Math.round(x), y: Math.round(y), held, flying, stunned, cls: pet.className, bubble: bubble.hidden ? null : bubbleText.textContent }),
+    state: () => ({ screen: homeId, mode, connected, present, followUp, paused, inCall, inMeeting, silent, dictating, capturing, wakeEngine, micReady, x: Math.round(x), y: Math.round(y), held, flying, stunned, cls: pet.className, bubble: bubble.hidden ? null : bubbleText.textContent }),
     fling: (sx, sy, fromY = 200) => { arrive(); setLift(true); held = true; y = fromY; samples = [{ t: performance.now() - 50, x, y }, { t: performance.now(), x: x + sx / 20, y: y + sy / 20 }]; release(); },
-    sendText, talk, dismiss, setStay, arrive, setAnim, toggleDictation, toggleCapture, setMode, feed: onBlock,
+    sendText, talk, dismiss, setStay, toggleSilent, arrive, setAnim, toggleDictation, toggleCapture, setMode, feed: onBlock,
   };
 })();

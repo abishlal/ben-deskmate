@@ -42,8 +42,10 @@ class WakeStream:
     The connection to the voice service is opened on the first audio and reopened if it drops.
     """
 
-    def __init__(self, on_wake: Callable[[float], Awaitable[None]]) -> None:
+    def __init__(self, on_wake: Callable[[float], Awaitable[None]],
+                 on_speech: Callable[[bool], Awaitable[None]] | None = None) -> None:
         self._on_wake = on_wake
+        self._on_speech = on_speech   # the detector's "speech started / stopped" on the same audio
         self._ws = None
         self._reader: asyncio.Task | None = None
         self._retry_at = 0.0
@@ -67,7 +69,12 @@ class WakeStream:
     async def _read(self, ws) -> None:
         try:
             async for message in ws:
-                await self._on_wake(float(json.loads(message).get("wake", 0)))
+                data = json.loads(message)
+                if "speech" in data:
+                    if self._on_speech:
+                        await self._on_speech(bool(data["speech"]))
+                elif "wake" in data:
+                    await self._on_wake(float(data["wake"]))
         except Exception:
             pass
 

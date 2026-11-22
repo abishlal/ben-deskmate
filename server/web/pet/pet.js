@@ -306,6 +306,16 @@
 
   function resetVad() { hot = 0; speaking = false; silenceMs = 0; totalMs = 0; voicedMs = 0; chunks = []; preroll = []; }
 
+  // The loudness of the last ~3 seconds of microphone blocks; its minimum is the background noise right now.
+  const NOISE_WINDOW_BLOCKS = 70;
+  const recentRms = [];
+  const noiseNow = () => recentRms.length ? Math.min(...recentRms) : floor;
+
+  // The voice service's speech detector (Silero) runs on the same live audio as the wake word and says when
+  // speech starts and stops. While its answer is current, a request ends when it hears no speech, so clatter,
+  // music or a TV across the room no longer keep it open. Without it, loudness alone decides.
+  let heardSpeech = false, vadFresh = false, vadWorks = false, lastStreamAt = 0;
+
   function onBlock(samples, rate) {
     lastBlockAt = performance.now();
     let blockPeak = 0;
@@ -322,8 +332,10 @@
     const resumable = mode === 'think' && lastSent && !playing && performance.now() - lastSent.at < RESUME_MS;
     if (mode !== 'listen' && !waitingForWake && !resumable) { if (speaking || preroll.length) resetVad(); return; }
     if (waitingForWake && wakeEngine && mode !== 'listen') streamWake(samples, rate);
+    if (mode === 'listen' && wakeEngine && connected) streamWake(samples, rate);   // for the speech detector
     let sum = 0; for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
     const rms = Math.sqrt(sum / samples.length), blockMs = samples.length / rate * 1000;
+    recentRms.push(rms); if (recentRms.length > NOISE_WINDOW_BLOCKS) recentRms.shift();
     const threshold = Math.max(0.012, floor * 3.5);
     const copy = new Float32Array(samples);
 
@@ -344,7 +356,13 @@
       return;
     }
     chunks.push(copy); totalMs += blockMs;
-    silenceMs = rms > threshold * 0.6 ? 0 : silenceMs + blockMs;
+    // Steady background sound (a fan, traffic, a TV) is not speech: compare with the quietest moment of the last
+    // few seconds as well, since speech always dips between words and noise does not. Without this, noise louder
+    // than the starting threshold kept a request open until it turned into a listening session.
+    const loud = rms > Math.max(threshold * 0.6, noiseNow() * 1.8);
+    // Your voice: speech, by the detector, and loud enough to be someone at the PC (not a TV across the room).
+    const voiceNow = vadWorks && vadFresh && mode === 'listen' ? loud && heardSpeech : loud;
+    silenceMs = voiceNow ? 0 : silenceMs + blockMs;
     if (!silenceMs) voicedMs += blockMs;
     const request = mode === 'listen' && !capturing && !dictating;
     // A request that has gone on for a while gets a longer pause before it counts as finished (people pause to think).
@@ -390,6 +408,9 @@
     const spokenMs = totalMs - silenceMs;
     let parts = chunks, voiced = voicedMs;
     resetVad();
+    // Learn the room's noise, so the same background sound does not start the next recording (capped, so a
+    // stretch of loud speech without pauses cannot make it deaf to normal speech).
+    floor = Math.max(floor, Math.min(noiseNow(), 0.015));
     if (carry && !capturing && !dictating) {     // what you said before the pause goes first
       parts = spokenMs < 350 ? carry.parts : carry.parts.concat(parts);
       voiced = spokenMs < 350 ? carry.voiced : carry.voiced + voiced;
@@ -423,6 +444,9 @@
   /** Live microphone audio for the wake-word detector: 16 kHz 16-bit samples behind a 'WAKE' tag. */
   function streamWake(samples, rate) {
     if (!ws || ws.readyState !== 1) return;
+    const now = performance.now();
+    if (now - lastStreamAt > 1000) vadFresh = false;   // the detector starts afresh after a gap: wait for its answer
+    lastStreamAt = now;
     const ratio = rate / 16000, n = Math.floor(samples.length / ratio);
     const view = new DataView(new ArrayBuffer(4 + n * 2));
     view.setUint32(0, 0x57414b45);                // "WAKE"
@@ -637,6 +661,7 @@
           }
           break;
         case 'wake_word': onWakeWord(); break;
+        case 'vad': heardSpeech = !!m.speech; vadFresh = true; vadWorks = true; break;
         case 'hello':
           connected = true; wakeEngine = !!m.wake_engine; inMeeting = !!m.meeting_quiet; setMode('ambient');
           ws.send(JSON.stringify({ type: 'client', host: !!(shell && shell.hostCall) }));

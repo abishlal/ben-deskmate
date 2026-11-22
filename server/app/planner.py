@@ -616,16 +616,17 @@ TOOLS = [review_tasks, find_free_time, day_summary, week_summary, save_meeting_n
 _calendar: list[dict] = []
 calendar_checked = 0.0
 _calendar_read_ok = 0.0   # when the calendar was last read successfully
+_calendar_fails = 0       # failed reads in a row: each one doubles the wait (5, 10, 20, 40, then 60 minutes)
 
 
 async def refresh_calendar() -> list[dict]:
     """Events from three hours ago to at least two hours ahead, re-read every five minutes."""
-    global _calendar, calendar_checked, _calendar_read_ok
+    global _calendar, calendar_checked, _calendar_read_ok, _calendar_fails
     if not hub.host_caps.get("calendar"):
         if time.monotonic() - _calendar_read_ok > 1800:   # gone for half an hour: forget it
             _calendar = []
         return _calendar
-    if time.monotonic() - calendar_checked < 300:
+    if time.monotonic() - calendar_checked < min(300 * 2 ** _calendar_fails, 3600):
         return _calendar
     calendar_checked = time.monotonic()
     now = db.ts()
@@ -633,8 +634,10 @@ async def refresh_calendar() -> list[dict]:
     try:
         _calendar = await hub.host_call("calendar_list", {"start": _local_iso(now - 3 * 3600), "end": _local_iso(now + ahead)})
         _calendar_read_ok = time.monotonic()
+        _calendar_fails = 0
     except hub.HostError as e:
-        log.warning("could not read the calendar: %s", e)
+        _calendar_fails = min(_calendar_fails + 1, 4)
+        log.warning("could not read the calendar (next try in %d min): %s", min(300 * 2 ** _calendar_fails, 3600) // 60, e)
     return _calendar
 
 

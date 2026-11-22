@@ -31,8 +31,40 @@ function Test-OutlookProfile {
 function Get-Mapi {
     if (-not (Test-Path 'Registry::HKEY_CLASSES_ROOT\Outlook.Application\CLSID')) { throw 'Classic Outlook is not installed.' }
     if (-not (Test-OutlookProfile)) { throw 'Classic Outlook has no account yet. Open classic Outlook once and sign in, then try again.' }
+    # An Outlook error box (e.g. "Outlook has exhausted all shared resources") blocks every call until it is closed:
+    # say so at once instead of waiting for the call to time out.
+    if (Get-Process OUTLOOK -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq 'Outlook Data File' }) {
+        throw 'Classic Outlook is showing an error box. Close OneNote and Outlook (and the error box), then try again.'
+    }
     $script:Outlook = New-Object -ComObject Outlook.Application
-    return $script:Outlook.GetNamespace('MAPI')
+    $ns = $script:Outlook.GetNamespace('MAPI')
+    try { $null = $ns.GetDefaultFolder($olFolderTasks).Name; return $ns }
+    catch {
+        # A hidden copy of Outlook started for the bridge (no window) sometimes loses its mailbox logon, e.g. after
+        # sleep or a network change, and then every call fails or hangs until it is restarted. Restart it, but only
+        # when it has no window open, so a copy you are working in is never closed; and at most every ten minutes.
+        if ($script:Outlook.Explorers.Count -or $script:Outlook.Inspectors.Count) { throw }
+        if ($script:OutlookRestarted -and ((Get-Date) - $script:OutlookRestarted).TotalMinutes -lt 10) { throw }
+        $script:OutlookRestarted = Get-Date
+        Restart-HiddenOutlook
+        $script:Outlook = New-Object -ComObject Outlook.Application
+        $ns = $script:Outlook.GetNamespace('MAPI')
+        try { $null = $ns.GetDefaultFolder($olFolderTasks).Name; return $ns }
+        catch { throw 'Classic Outlook cannot reach your mailbox. Open classic Outlook once to sign in again.' }
+    }
+}
+
+function Restart-HiddenOutlook {
+    try { $script:Outlook.Quit() } catch {}
+    $script:Outlook = $null
+    [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    $hidden = @(Get-CimInstance Win32_Process -Filter "Name='OUTLOOK.EXE'" | Where-Object { $_.CommandLine -match '-Embedding' })
+    foreach ($p in $hidden) {
+        $proc = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+        if (-not $proc) { continue }
+        if (-not $proc.WaitForExit(15000) -and $proc.MainWindowHandle -eq 0) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+    }
+    Start-Sleep -Seconds 2
 }
 
 function Get-TaskFolders($ns) {

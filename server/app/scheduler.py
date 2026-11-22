@@ -34,6 +34,7 @@ def nudge_due_todos() -> None:
 
 
 _last_ms_check = 0.0
+_ms_fails = 0   # failed checks in a row: each one doubles the wait, so a broken Outlook is not hammered
 
 
 async def _microsoft_task_times(source: str) -> list[tuple[str, str, int]]:
@@ -50,17 +51,21 @@ async def _microsoft_task_times(source: str) -> list[tuple[str, str, int]]:
 async def nudge_microsoft_todos() -> None:
     """Speak up about Microsoft To Do tasks whose reminder time is near.
     Checked every two minutes through Graph, every five through the desktop bridge (it starts PowerShell)."""
-    global _last_ms_check
+    global _last_ms_check, _ms_fails
     await hub.refresh_host_caps_if_stale()
     source = (await asyncio.to_thread(tools.current_mode)).todos
-    if source == "local" or time.monotonic() - _last_ms_check < (120 if source == "graph" else 300):
+    wait = min((120 if source == "graph" else 300) * 2 ** _ms_fails, 3600)
+    if source == "local" or time.monotonic() - _last_ms_check < wait:
         return
     _last_ms_check = time.monotonic()
     try:
         tasks = await _microsoft_task_times(source)
     except (msgraph.GraphError, hub.HostError) as e:
-        log.warning("could not check Microsoft To Do: %s", e)
+        _ms_fails = min(_ms_fails + 1, 4)
+        log.warning("could not check Microsoft To Do (next try in %d min): %s",
+                    min((120 if source == "graph" else 300) * 2 ** _ms_fails, 3600) // 60, e)
         return
+    _ms_fails = 0
     horizon = db.ts() + prefs.minutes("nudge_lead_minutes") * 60
     for task_id, title, when in tasks:
         if when > horizon or when < db.ts() - 6 * 3600:

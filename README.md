@@ -99,6 +99,20 @@ and only that recording is transcribed and sent to Claude.
   and `docker compose up -d`. Any other name needs a custom-trained model.
 - **Diagnosing:** http://127.0.0.1:47821/api/heard shows the last few detections (kept in memory only).
 
+### How it knows you have finished speaking
+
+While it records a request, the same live audio also goes through a speech detector in the voice container (Silero VAD,
+the one faster-whisper already ships, so nothing extra is downloaded). It only answers "is this a human voice right now?",
+many times a second. The request ends about a second after it stops hearing a voice that is loud enough to be you at the PC,
+so a fan, clatter, music, traffic, or a TV or people across the room no longer keep it listening. If the detector is not
+available, loudness decides, measured against the room's own background noise.
+
+- **A request that runs past ~15 seconds of speech** becomes a listening session ("Still listening. Say 'stop' when you're done.").
+  If it then hears only noise for three pieces in a row, it takes that as the end and answers. Sessions you start on purpose
+  ("summarise this", "take meeting minutes") keep waiting through pauses until you say "stop".
+- **Still slow to stop in a noisy room:** someone talking near you at normal volume counts as speech. Move the microphone
+  closer, or press the talk hotkey again to send what it has.
+
 Things to say:
 
 - "Remind me in twenty minutes to stretch", "Remind me every weekday at nine thirty about standup"
@@ -210,6 +224,23 @@ It never opens mail or contacts, never sends anything, and refuses to change or 
 
 `http://127.0.0.1:47821/health` shows what is in use under `todos_and_notes` (`local`, `desktop` or `graph`).
 It only works while the shell is running on this PC; in a browser tab the pet falls back to its local lists.
+
+### When calendar and To Do stop working
+
+The bridge drives a hidden copy of classic Outlook (`OUTLOOK.EXE -Embedding`, no window). Calls go one at a time, so a stuck
+Outlook also makes OneNote requests wait. The pet guards against this:
+
+- If the hidden Outlook loses its mailbox logon (after sleep or a network change), the bridge closes and restarts it, at most
+  every ten minutes, and only when it has no window open, so an Outlook you are working in is never closed.
+- If Outlook shows an error box, the call fails at once with a clear message instead of hanging for 45 seconds.
+- After a failed calendar or To Do check, the next background check waits twice as long (5, 10, 20, 40, then 60 minutes),
+  and goes back to every five minutes after the first success.
+
+The server log (`docker compose logs server`) shows "could not read the calendar" or "could not check Microsoft To Do" when
+this happens. The usual fix is **"Outlook has exhausted all shared resources"**: Outlook's shared memory is used up, often by
+OneNote left open for days (it loads Outlook's mail libraries) together with repeated Outlook restarts. Close OneNote and
+Outlook, then restart the pet (`Stop-Process -Name electron`, then start it again). If that is not enough, sign out of
+Windows or restart.
 
 ## Microsoft To Do and OneNote through Microsoft Graph (optional alternative)
 

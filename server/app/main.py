@@ -263,6 +263,7 @@ _NOTES_START = re.compile(
 MEETING_TASK = ("write these up as meeting minutes: a one-line summary, the points discussed, decisions, and action items "
                 "with owners and due dates where mentioned; keep everything they said, and offer to save it as a note")
 # A request that ran on past ~20 seconds becomes a listening session; its first words say what to do with it.
+AUTO_EMPTY_PIECES = 3   # a long request ends by itself after this many pieces in a row with no words
 AUTO_TASK = ("the text starts with their request; do what it asks with the rest (if it is about a meeting, " + MEETING_TASK + ")")
 
 
@@ -284,6 +285,7 @@ class Capture:
         self.parts: list[str] = []
         self.lock = asyncio.Lock()
         self.done = False
+        self.empty = 0     # pieces in a row with no words in them (background noise)
 
 
 async def begin_capture(ws: WebSocket, conn: dict, task: str, auto: bool = False) -> None:
@@ -306,7 +308,13 @@ async def handle_capture(ws: WebSocket, conn: dict, wav: bytes) -> None:
             return
         text = text.strip()
         if not text or text.lower().strip(" .!") in ("you", "thanks for watching", "bye"):
+            # A request that ran long and is now only picking up noise: the user has finished, so answer it
+            # rather than wait for "stop" (an explicit summarise / minutes session keeps waiting through pauses).
+            cap.empty += 1
+            if cap.auto and cap.empty >= AUTO_EMPTY_PIECES:
+                await _finish_capture(ws, conn, cap)
             return
+        cap.empty = 0
         command = voice.strip_wake_word(text)
         command = text if command is None else command
         if _CAPTURE_STOP.match(command) or (command == "" and text):   # "stop", or "Hey Jarvis" on its own
@@ -443,7 +451,10 @@ async def websocket(ws: WebSocket) -> None:
         _heard.append({"at": config.now().strftime("%H:%M:%S"), "heard": f"(wake word detected, score {score:.2f})", "woke": True})
         await hub.send(ws, {"type": "wake_word", "score": score})
 
-    wake_stream = voice.WakeStream(on_wake)
+    async def on_speech(on: bool) -> None:
+        await hub.send(ws, {"type": "vad", "speech": on})
+
+    wake_stream = voice.WakeStream(on_wake, on_speech)
 
     async def start(coro) -> None:
         nonlocal turn

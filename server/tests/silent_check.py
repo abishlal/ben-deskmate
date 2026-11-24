@@ -109,6 +109,48 @@ async def main_check() -> None:
         for text in texts:
             check(f"{text!r} -> {want}", main.silent_command(text) is want)
 
+    # --- "stay on screen" phrases (the pet's own setting)
+    stay = {
+        True: ["Stay on screen.", "turn on stay on screen", "Stay on the screen", "enable stay on screen",
+               "keep yourself on screen", "stay visible please", "Hey Jarvis, stay on screen"],
+        False: ["Turn off stay on screen.", "turn off stay on screen", "stay on screen off", "Switch stay on screen off",
+                "disable stay on screen", "don't stay on screen", "stop staying on screen", "only come when I call you",
+                "hide when you're done"],
+        None: ["what is stay on screen", "stay silent", "turn off silent mode", "remind me to stay focused",
+               "is stay on screen on"],
+    }
+    for want, texts in stay.items():
+        for text in texts:
+            check(f"stay: {text!r} -> {want}", main.stay_command(text) is want)
+
+    # --- "stay on screen" is stored on the server, and every pet is told when it changes
+    check("stay_on_screen is not stored at first", not prefs.is_set("stay_on_screen"))
+    check("stay_on_screen defaults to off", prefs.get("stay_on_screen") == "off")
+    check("stay_on_screen accepts ON", prefs.put("stay_on_screen", "ON") == "on")
+    try:
+        prefs.put("stay_on_screen", "maybe")
+        check("stay_on_screen rejects 'maybe'", False)
+    except ValueError:
+        check("stay_on_screen rejects 'maybe'", True)
+    real_speak = voice.speak
+
+    async def no_speak(text: str) -> bytes:
+        return b""
+    voice.speak = no_speak
+    try:
+        for on in (False, True, False):
+            ws, other = FakeWs(), FakeWs()
+            hub.clients.clear(); hub.clients.update({ws, other})
+            await main.handle_stay_command(ws, on)
+            told = [m for m, _ in other.sent if m.get("type") == "stay"]
+            check(f"voice stay {on}: stored", prefs.enabled("stay_on_screen") is on)
+            check(f"voice stay {on}: other pets told", told == [{"type": "stay", "on": on}])
+            check(f"voice stay {on}: answered", any(m.get("type") == "reply_done" for m, _ in ws.sent))
+    finally:
+        voice.speak = real_speak
+        hub.clients.clear()
+    check("stay_on_screen is stored now", prefs.is_set("stay_on_screen"))
+
     # --- nothing is spoken while silent
     spoken: list[str] = []
 

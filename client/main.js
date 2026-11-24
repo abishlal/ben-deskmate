@@ -526,6 +526,7 @@ else app.whenReady().then(() => {
     if (!e.senderFrame || !e.senderFrame.url.startsWith(ORIGIN + '/pet/')) return { ok: false, error: 'Not allowed from this page.' };
     return hostCall(op, args);
   });
+  ipcMain.on('pet:stay', (_e, on) => { if (state.stay !== !!on) { state.stay = !!on; if (tray) buildMenu(); } });
   ipcMain.on('pet:silent', (_e, on) => { if (state.silent !== !!on) { state.silent = !!on; if (tray) buildMenu(); } });
   ipcMain.on('pet:ready', (_e, settings) => {
     state = { ...state, ...settings }; buildMenu();

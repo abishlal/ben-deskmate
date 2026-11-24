@@ -56,6 +56,21 @@ function codeTexture() {
   return t;
 }
 
+function checklistTexture() {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 160;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fbfaf5'; g.fillRect(0, 0, 128, 160);
+  g.lineWidth = 5; g.lineCap = 'round'; g.lineJoin = 'round';
+  for (let row = 0; row < 4; row++) {
+    const y = 30 + row * 34;
+    g.strokeStyle = '#8a8f96'; g.strokeRect(12, y - 10, 20, 20);
+    g.fillStyle = '#c3c7cc'; g.fillRect(42, y - 4, 70 - (row % 2) * 18, 8);
+    if (row < 2) { g.strokeStyle = '#2f9b45'; g.beginPath(); g.moveTo(14, y); g.lineTo(21, y + 8); g.lineTo(34, y - 12); g.stroke(); }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 function buildBen() {
   const root = new THREE.Group();          // stands on y = 0
   const body = new THREE.Group(); root.add(body);
@@ -107,6 +122,57 @@ function buildBen() {
     arms[name] = { shoulder, upper, elbow, hand, side };
   }
 
+  // ---- props held in the hands. Each hand has a holder that pose() keeps lined up with the body, so a glass
+  // stays level whatever the arm is doing. Props are oversized: he is only ~150 px tall on screen.
+  const holders = {};
+  for (const name of ['left', 'right']) {
+    const h = new THREE.Group(); h.position.y = -0.42; arms[name].elbow.add(h); holders[name] = h;
+  }
+  const props = {};
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0xeaf7ff, transparent: true, opacity: 0.38, roughness: 0.05, metalness: 0.1, side: THREE.DoubleSide, depthWrite: false });
+  const glass = new THREE.Group(); glass.position.set(-0.04, 0.1, 0.16);
+  const water = mesh(new THREE.CylinderGeometry(0.15, 0.13, 0.3, 24), new THREE.MeshStandardMaterial({ color: 0x3f9fea, transparent: true, opacity: 0.85, roughness: 0.15, emissive: 0x1d5f99, emissiveIntensity: 0.3 }), { y: -0.06, shadow: false });
+  glass.add(water);
+  glass.add(mesh(new THREE.CylinderGeometry(0.17, 0.14, 0.44, 24, 1, true), glassMat, { shadow: false }));
+  glass.add(mesh(new THREE.CircleGeometry(0.14, 24), glassMat, { y: -0.22, rx: -Math.PI / 2, shadow: false }));
+  glass.add(mesh(new THREE.TorusGeometry(0.17, 0.014, 6, 24), mat(0xffffff, { roughness: 0.1 }), { y: 0.22, rx: Math.PI / 2, shadow: false }));
+  holders.right.add(glass); props.glass = glass;
+
+  const thumb = mesh(capsule(0.05, 0.1), skinMat, { x: 0.02, y: 0.15, z: 0.02 });
+  holders.right.add(thumb); props.thumb = thumb;
+
+  const pencil = new THREE.Group(); pencil.position.set(-0.04, 0.02, 0.1); pencil.rotation.set(-0.7, 0, 0.6);
+  pencil.add(mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.36, 8), mat(0xf2c230)));
+  pencil.add(mesh(new THREE.ConeGeometry(0.035, 0.08, 8), mat(0x3a2f28), { y: -0.22, rx: Math.PI }));
+  pencil.add(mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.05, 8), mat(0xe58a9a), { y: 0.2 }));
+  holders.right.add(pencil); props.pencil = pencil;
+
+  const clipboard = new THREE.Group(); clipboard.position.set(0.2, 0.22, 0.22); clipboard.rotation.set(-0.2, 0.15, -0.08);
+  clipboard.add(mesh(new THREE.BoxGeometry(0.62, 0.8, 0.04), mat(0xa8774a, { roughness: 0.7 })));
+  const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.54, 0.66), new THREE.MeshBasicMaterial({ map: checklistTexture() }));
+  paper.position.set(0, -0.04, 0.022); clipboard.add(paper);
+  clipboard.add(mesh(new THREE.BoxGeometry(0.26, 0.09, 0.06), mat(0xc9c9c4, { metalness: 0.6, roughness: 0.3 }), { y: 0.38, z: 0.02 }));
+  holders.left.add(clipboard); props.clipboard = clipboard;
+
+  const mugMat = mat(0xd9643a, { roughness: 0.5 });
+  const mug = new THREE.Group(); mug.position.set(0.06, 0.1, 0.16);
+  mug.add(mesh(new THREE.CylinderGeometry(0.16, 0.15, 0.3, 24), mugMat));
+  mug.add(mesh(new THREE.CircleGeometry(0.145, 24), mat(0x4a2a17), { y: 0.151, rx: -Math.PI / 2, shadow: false }));
+  mug.add(mesh(new THREE.TorusGeometry(0.08, 0.028, 8, 16), mugMat, { x: -0.18 }));
+  const steam = [];
+  for (let i = 0; i < 2; i++) {
+    const puff = mesh(sphere(1, 10), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }), { sx: 0.07, sy: 0.1, sz: 0.07, shadow: false });
+    mug.add(puff); steam.push(puff);
+  }
+  holders.left.add(mug); props.mug = mug;
+
+  // a watch on his left wrist, for "it's time"
+  const watch = new THREE.Group(); watch.position.y = -0.27; arms.left.elbow.add(watch);
+  watch.add(mesh(new THREE.TorusGeometry(0.145, 0.045, 8, 20), mat(0xe2b13c, { metalness: 0.5, roughness: 0.3 }), { rx: Math.PI / 2 }));
+  for (const z of [-0.17, 0.17]) watch.add(mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.05, 16), mat(0xffffff, { emissive: 0xbfe6ff, emissiveIntensity: 0.4 }), { z, rx: Math.PI / 2 }));
+  props.watch = watch;
+  for (const p of Object.values(props)) { p.scale.setScalar(0.001); p.visible = false; }
+
   // ---- head
   const neck = mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.2, 16), skinMat, { y: 2.12 });
   body.add(neck);
@@ -132,21 +198,24 @@ function buildBen() {
   for (const side of [-1, 1]) {
     const eye = new THREE.Group(); eye.position.set(side * 0.27, 0.06, 0.62); eye.rotation.y = side * 0.22; head.add(eye);
     eye.add(mesh(sphere(1), mat(C.eyeWhite, { roughness: 0.25 }), { sx: 0.17, sy: 0.2, sz: 0.1, shadow: false }));
-    eye.add(mesh(sphere(1), mat(C.iris, { roughness: 0.2 }), { sx: 0.11, sy: 0.13, sz: 0.05, z: 0.07, shadow: false }));
-    eye.add(mesh(sphere(1), mat(C.pupil, { roughness: 0.2 }), { sx: 0.06, sy: 0.075, sz: 0.03, z: 0.1, shadow: false }));
-    eye.add(mesh(sphere(1), mat(0xffffff, { emissive: 0xffffff, emissiveIntensity: 0.6 }), { sx: 0.03, sy: 0.03, sz: 0.02, x: 0.035, y: 0.05, z: 0.12, shadow: false }));
+    const look = new THREE.Group(); eye.add(look);   // iris, pupil and highlight move together when he looks around
+    look.add(mesh(sphere(1), mat(C.iris, { roughness: 0.2 }), { sx: 0.11, sy: 0.13, sz: 0.05, z: 0.07, shadow: false }));
+    look.add(mesh(sphere(1), mat(C.pupil, { roughness: 0.2 }), { sx: 0.06, sy: 0.075, sz: 0.03, z: 0.1, shadow: false }));
+    look.add(mesh(sphere(1), mat(0xffffff, { emissive: 0xffffff, emissiveIntensity: 0.6 }), { sx: 0.03, sy: 0.03, sz: 0.02, x: 0.035, y: 0.05, z: 0.12, shadow: false }));
     const brow = mesh(capsule(0.03, 0.18), mat(C.brow), { x: side * 0.27, y: 0.33, z: 0.66, rz: Math.PI / 2 - side * 0.08, shadow: false });
     head.add(brow);
-    eyes.push({ eye, brow, side });
+    eyes.push({ eye, look, brow, side });
   }
 
   // glasses: thin dark round frames
+  // (in their own group, so they can go askew when he is startled)
   const frame = mat(0x23262b, { roughness: 0.35, metalness: 0.3 });
+  const glasses = new THREE.Group(); glasses.position.set(0, 0.07, 0.75); head.add(glasses);
   for (const side of [-1, 1]) {
-    head.add(mesh(new THREE.TorusGeometry(0.225, 0.02, 10, 40), frame, { x: side * 0.27, y: 0.06, z: 0.73, ry: side * 0.22, shadow: false }));
-    head.add(mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.7, 8), frame, { x: side * 0.63, y: 0.08, z: 0.38, rx: Math.PI / 2, ry: 0, rz: 0, shadow: false })).rotation.set(Math.PI / 2, 0, side * -0.42);
+    glasses.add(mesh(new THREE.TorusGeometry(0.225, 0.02, 10, 40), frame, { x: side * 0.27, y: -0.01, z: -0.02, ry: side * 0.22, shadow: false }));
+    glasses.add(mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.7, 8), frame, { x: side * 0.63, y: 0.01, z: -0.37, rx: Math.PI / 2, shadow: false }));
   }
-  head.add(mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.12, 8), frame, { y: 0.08, z: 0.79, rz: Math.PI / 2, shadow: false }));
+  glasses.add(mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.12, 8), frame, { y: 0.01, z: 0.04, rz: Math.PI / 2, shadow: false }));
 
   // mouth: a smile that can open while talking
   const mouth = new THREE.Group(); mouth.position.set(0.04, -0.3, 0.68); head.add(mouth);
@@ -183,7 +252,7 @@ function buildBen() {
     visorPivot.add(d); dots.push(d);
   }
 
-  return { root, body, torso, head, neck, arms, legs, eyes, mouth, smile, open, visorPivot, visorMat, dots, laptop };
+  return { root, body, torso, head, neck, arms, legs, eyes, glasses, mouth, smile, open, visorPivot, visorMat, dots, laptop, holders, props, water, steam };
 }
 
 // lite: for the pet window, which renders in software (no GPU): no real-time shadows, lower pixel density,
@@ -221,6 +290,12 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
   scene.add(ben.root);
 
   let state = 'idle', since = performance.now(), nextBlink = 1500, talkLevel = 0, dragYaw = 0, dragging = false, lastX = 0;
+  let night = false, facing = 1, speaking = false, lookX = 0, lookY = 0, eyeX = 0, eyeY = 0, rTilt = 0, glassesZ = 0, waterLevel = 1;
+  const propScale = {};
+  const qBody = new THREE.Quaternion(), qParent = new THREE.Quaternion(), qTilt = new THREE.Quaternion(), eTilt = new THREE.Euler();
+  // States where his eyes (and a little of his head) follow the mouse pointer.
+  const NIGHT_MUG = new Set(['idle', 'talk', 'wave', 'quiet', 'sit', 'look']);
+  const LOOKERS = new Set(['idle', 'sleepy', 'listen', 'sit', 'water', 'watch', 'happy', 'quiet', 'talk']);
   if (orbit) {
     canvas.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clientX; });
     addEventListener('pointerup', () => { dragging = false; });
@@ -297,7 +372,129 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
         target.eyesOpen = 0.08; target.headX = 0.32; target.headZ = 0.1; target.bodyY = -0.02;
         target.lUpperZ = -0.25; target.rUpperZ = 0.25;
         break;
+
+      // ---- coming and going
+      case 'look':     // just come up: a quick look round
+        target.headY = Math.sin(s * 4.2) * 0.55; target.browY = 0.03;
+        break;
+      case 'climb': {  // hand over hand on a rope that hangs in front of him
+        const w = t / 150;
+        target.lUpperX = -1.5 + Math.sin(w) * 0.3; target.lUpperZ = 0.45; target.lElbowX = -0.4 - Math.max(0, Math.sin(w)) * 0.7;
+        target.rUpperX = -1.5 - Math.sin(w) * 0.3; target.rUpperZ = -0.45; target.rElbowX = -0.4 - Math.max(0, -Math.sin(w)) * 0.7;
+        target.lLegX = -0.4; target.rLegX = -0.3; target.lLegZ = 0.12; target.rLegZ = -0.12;   // knees together round the rope
+        target.headX = 0.1; target.browY = 0.03;
+        break;
+      }
+      case 'float':    // drifting down under an umbrella (the page draws it), looking where he will land
+        target.rUpperZ = 2.85; target.rElbowZ = 0.25; target.rUpperX = -0.1;
+        target.lUpperZ = -0.5 + Math.sin(t / 700) * 0.1;
+        target.lLegX = Math.sin(t / 600) * 0.25; target.rLegX = -Math.sin(t / 600) * 0.25;
+        target.bodyRotZ = Math.sin(t / 900) * 0.05; target.headX = 0.15; target.eyesOpen = 0.85;
+        break;
+      case 'peek':     // leaning in round the edge of the screen, with a little wave
+        target.bodyRotZ = 0.25; target.headZ = 0.2; target.headY = -0.25; target.browY = 0.05; target.eyesOpen = 1.15;
+        target.lUpperZ = -2.3; target.lElbowZ = -0.6 + Math.sin(t / 120) * 0.35;
+        break;
+      case 'walk': case 'run': {
+        const fast = state === 'run', w = t / (fast ? 80 : 150), a = fast ? 0.8 : 0.5;
+        target.lLegX = Math.sin(w) * a; target.rLegX = -Math.sin(w) * a;
+        target.lUpperX = -Math.sin(w) * a * 0.9; target.rUpperX = Math.sin(w) * a * 0.9;
+        if (fast) { target.lElbowX = -1.1; target.rElbowX = -1.1; target.headX = 0.1; }
+        target.bodyY = Math.abs(Math.sin(w)) * (fast ? 0.12 : 0.05);
+        break;
+      }
+
+      // ---- reminders
+      case 'water':    // holding out a glass of water, nodding: "drink up"
+        target.glass = 1;
+        target.rUpperX = -1.05; target.rUpperZ = -0.15; target.rElbowX = -0.55;
+        target.lUpperZ = -0.2; target.lUpperX = -0.25; target.lElbowX = -0.5;   // other hand relaxed
+        target.headX = Math.max(0, Math.sin(t / 260)) * 0.14 - 0.04; target.headZ = 0.08; target.browY = 0.03;
+        break;
+      case 'sip':      // he takes a sip too, then "ahh"
+        target.glass = 1;
+        if (s < 1.8) {
+          target.rUpperX = -1.6; target.rUpperY = -0.5; target.rUpperZ = -0.45; target.rElbowX = -1.8;
+          target.rTilt = 0.9 * Math.min(1, s / 0.6); target.headX = -0.22 * Math.min(1, s / 0.6); target.eyesOpen = 0.25;
+        } else {
+          target.rUpperX = -1.0; target.rUpperZ = -0.1; target.rElbowX = -0.5;
+          target.mouthOpen = 0.6; target.browY = 0.04; target.eyesOpen = 0.2;
+        }
+        if (s > 1.0) target.waterLevel = 0.55;
+        break;
+      case 'stretch': {  // break time: arms up, leaning side to side, the odd yawn
+        const lean = Math.sin(t / 1100), c = s % 6, yawn = c < 1.6 ? Math.sin(c / 1.6 * Math.PI) : 0;
+        target.lUpperZ = -2.75 - lean * 0.1; target.rUpperZ = 2.75 - lean * 0.1; target.lElbowZ = -0.7; target.rElbowZ = 0.7;
+        target.bodyRotZ = lean * 0.13; target.headZ = lean * 0.1;
+        target.mouthOpen = yawn; target.eyesOpen = 0.45 - yawn * 0.3; target.headX = -yawn * 0.2;
+        break;
+      }
+      case 'watch': {  // taps his watch, then points at you: "it's time"
+        target.watch = 1;
+        target.lUpperX = -0.6; target.lUpperZ = 0.35; target.lElbowX = -1.9;   // forearm up in front of him, watch showing
+        if (s % 3.2 < 2) {
+          target.rUpperX = -0.9; target.rUpperZ = -0.5; target.rElbowX = -1.3 + Math.max(0, Math.sin(t / 70)) * 0.25;
+          target.headX = 0.2; target.headY = -0.2;
+        } else {
+          target.rUpperX = -1.5; target.rUpperZ = 0.3; target.rElbowX = -0.05; target.browY = 0.05;   // and points at you
+        }
+        break;
+      }
+      case 'clipboard': {  // ticking things off a checklist, looking up at you now and then
+        target.clipboard = 1; target.pencil = 1;
+        target.lUpperX = -0.95; target.lUpperZ = 0.2; target.lElbowX = -1.0;
+        target.rUpperX = -0.95; target.rUpperZ = -0.35; target.rElbowX = -0.9 + (s % 1.4 < 0.5 ? Math.sin(t / 55) * 0.15 : 0);
+        if (s % 4 > 2.6) { target.browY = 0.04; } else { target.headX = 0.18; target.headY = -0.12; }
+        break;
+      }
+      case 'happy':    // thumbs up, with a hop
+        target.thumb = 1;
+        target.rUpperX = -0.55; target.rUpperZ = 0.45; target.rElbowX = -1.5;
+        target.lUpperZ = -0.3;
+        target.bodyY = s < 1.2 ? Math.abs(Math.sin(s * Math.PI * 2.5)) * 0.35 : 0;
+        target.eyesOpen = 0.35; target.browY = 0.04; target.headZ = -0.08;
+        break;
+
+      // ---- in between
+      case 'startle': {  // poked: a jump, arms out, glasses knocked askew
+        const p = Math.max(0, Math.sin(Math.min(1, s / 0.55) * Math.PI));
+        target.bodyY = p * 0.38; target.lUpperZ = -1.6; target.rUpperZ = 1.6; target.lElbowZ = -0.6; target.rElbowZ = 0.6;
+        target.lLegX = p * 0.3; target.rLegX = -p * 0.3;
+        target.eyesOpen = 1.35; target.browY = 0.08; target.mouthOpen = 0.5; target.glassesZ = 0.3;
+        break;
+      }
+      case 'sit':      // sitting on the taskbar, swinging his feet
+        target.bodyY = -0.82; target.lLegX = -1.45 + Math.sin(t / 380) * 0.18; target.rLegX = -1.45 - Math.sin(t / 380) * 0.18;
+        target.lUpperZ = -0.55; target.rUpperZ = 0.55; target.lElbowX = -0.3; target.rElbowX = -0.3;
+        target.headZ = Math.sin(t / 1700) * 0.06; target.headY = Math.sin(t / 2300) * 0.15;
+        break;
+      case 'yawn': {   // a big yawn and stretch (about two seconds)
+        const p = Math.sin(Math.min(1, s / 2) * Math.PI);
+        target.lUpperZ = -0.12 - p * 2.6; target.rUpperZ = 0.12 + p * 2.6; target.lElbowZ = -p * 0.6; target.rElbowZ = p * 0.6;
+        target.mouthOpen = p; target.eyesOpen = 1 - p * 0.85; target.headX = -p * 0.25; target.bodyY = p * 0.04;
+        break;
+      }
+      case 'sleepy': {   // late in the day: slower, heavy eyes, a mug of something warm, a yawn now and then
+        target.mug = 1;
+        const c = s % 10;
+        target.lUpperX = -0.85; target.lUpperZ = 0.15; target.lElbowX = -1.15;
+        if (c > 3 && c < 4.6) { target.lUpperX = -1.45; target.lElbowX = -1.75; target.headX = -0.1; target.eyesOpen = 0.2; }   // a sip
+        else { target.eyesOpen = 0.55; target.headX = 0.08; }
+        target.headZ = Math.sin(t / 2600) * 0.08;
+        if (c > 7 && c < 9) {
+          const y = Math.sin((c - 7) / 2 * Math.PI);
+          target.mouthOpen = y; target.eyesOpen = 0.55 - y * 0.45;
+          target.rUpperX = -y * 1.5; target.rUpperZ = 0.12 - y * 0.4; target.rElbowX = -y * 1.9;   // hand over his mouth
+        }
+        break;
+      }
     }
+    // Late in the day he keeps his mug in his left hand and his eyes get heavy, whatever he is doing with the other hand.
+    if (night && NIGHT_MUG.has(state)) {
+      target.mug = 1; target.lUpperX = -0.85; target.lUpperZ = 0.15; target.lElbowX = -1.15; target.lElbowZ = 0;
+      target.eyesOpen = Math.min(target.eyesOpen, 0.62);
+    }
+    if (LOOKERS.has(state)) { target.headY += lookX * 0.4; target.headX += lookY * 0.2; }
 
     ben.body.position.y = lerp(ben.body.position.y, target.bodyY, k);
     ben.body.rotation.z = lerp(ben.body.rotation.z, target.bodyRotZ, k);
@@ -319,6 +516,29 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
     R.elbow.rotation.x = lerp(R.elbow.rotation.x, target.rElbowX, k);
     R.elbow.rotation.z = lerp(R.elbow.rotation.z, target.rElbowZ, k);
 
+    // props: grow in when the pose uses them, shrink away when it does not; the holders keep them level
+    for (const [name, p] of Object.entries(ben.props)) {
+      const v = lerp(propScale[name] || 0.001, target[name] ? 1 : 0.001, Math.min(1, k * 1.5));
+      propScale[name] = v; p.scale.setScalar(v); p.visible = v > 0.03;
+    }
+    rTilt = lerp(rTilt, target.rTilt || 0, k);
+    ben.root.updateMatrixWorld(true);
+    ben.body.getWorldQuaternion(qBody);
+    for (const side of ['left', 'right']) {
+      const h = ben.holders[side];
+      h.parent.getWorldQuaternion(qParent);
+      h.quaternion.copy(qParent.invert().multiply(qBody));
+      if (side === 'right' && rTilt > 0.01) h.quaternion.multiply(qTilt.setFromEuler(eTilt.set(0, 0, rTilt)));
+    }
+    waterLevel = lerp(waterLevel, target.waterLevel || (state === 'sip' ? waterLevel : 1), k * 0.5);
+    ben.water.scale.y = waterLevel; ben.water.position.y = -0.21 + 0.15 * waterLevel;
+    if (ben.props.mug.visible) ben.steam.forEach((puff, i) => {
+      const c = ((t / 1600) + i * 0.5) % 1;
+      puff.position.set(Math.sin(c * 6 + i) * 0.04, 0.2 + c * 0.35, 0); puff.material.opacity = Math.sin(c * Math.PI) * 0.5;
+    });
+    glassesZ = lerp(glassesZ, target.glassesZ || 0, target.glassesZ ? k * 2 : k * 0.25);   // knocked askew fast, straightened slowly
+    ben.glasses.rotation.z = glassesZ;
+
     // visor: folds down over the eyes and glows green (amber when he has to stay quiet)
     ben.visorPivot.rotation.x = lerp(ben.visorPivot.rotation.x, target.visorDown ? 0 : -1.25, k);
     ben.visorMat.emissive.setHex(state === 'quiet' ? C.visorQuiet : C.visorGlow);
@@ -333,16 +553,25 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
     nextBlink -= dt * 1000;
     let open = target.eyesOpen;
     if (nextBlink < 0) { if (nextBlink < -130) nextBlink = 2200 + Math.random() * 3000; else open = Math.min(open, 0.1); }
+    const looking = LOOKERS.has(state);
+    eyeX = lerp(eyeX, looking ? lookX : 0, k); eyeY = lerp(eyeY, looking ? lookY : 0, k);
     for (const e of ben.eyes) {
       e.eye.scale.y = lerp(e.eye.scale.y, open, Math.min(1, k * 3));
       e.brow.position.y = lerp(e.brow.position.y, 0.33 + target.browY, k);
+      e.look.position.set(eyeX * 0.04, -eyeY * 0.035, 0);
     }
-    const level = state === 'talk' ? (talkLevel || (0.5 + 0.5 * Math.sin(t / 90) * Math.sin(t / 210))) : 0;
+    // the mouth moves while he talks (also while holding up a prop), and opens for a yawn or an "ahh"
+    const talking = state === 'talk' || (speaking && !['sip', 'yawn', 'sleep'].includes(state));
+    const level = Math.max(talking ? (talkLevel || (0.5 + 0.5 * Math.sin(t / 90) * Math.sin(t / 210))) : 0, target.mouthOpen || 0);
     ben.open.visible = level > 0.15;
     ben.smile.visible = !ben.open.visible;
     ben.open.scale.y = 0.04 + level * 0.06;
 
-    ben.root.rotation.y = lerp(ben.root.rotation.y, dragYaw + (state === 'idle' ? Math.sin(t / 3000) * 0.15 : 0), k);
+    let yaw = dragYaw;
+    if (state === 'idle') yaw += Math.sin(t / 3000) * 0.15;
+    else if (state === 'walk' || state === 'run') yaw += facing * 0.9;   // turned the way he is going
+    else if (state === 'peek') yaw -= 0.35;
+    ben.root.rotation.y = lerp(ben.root.rotation.y, yaw, k);
   }
 
   let last = performance.now(), raf = 0, running = true;
@@ -362,6 +591,14 @@ export function createBen(canvas, { orbit = false, zoom = 1, lite = false, fps =
     // In the air: the soft shadow under his feet goes (the page draws one on the floor instead).
     setAirborne(on) { ground.visible = !on; },
     setTalkLevel(v) { talkLevel = Math.max(0, Math.min(1, v)); },
+    // His mouth moves with the voice even in poses other than 'talk' (holding the glass of water, say).
+    setSpeaking(on) { speaking = !!on; },
+    // Which way he faces while walking: -1 left, 1 right.
+    setFacing(dir) { facing = dir < 0 ? -1 : 1; },
+    // Night: the mug and sleepy eyes in most poses (the 'sleepy' idle has them anyway).
+    setNight(on) { night = !!on; },
+    // Where the mouse pointer is, from -1 to 1 each way (0, 0: straight ahead). His eyes and head follow it.
+    setLook(x, y) { lookX = Math.max(-1, Math.min(1, x)); lookY = Math.max(-1, Math.min(1, y)); },
     pause() { if (running) { cancelAnimationFrame(raf); running = false; } },
     resume() { if (!running) { running = true; last = performance.now(); raf = requestAnimationFrame(frame); } },
     get state() { return state; },

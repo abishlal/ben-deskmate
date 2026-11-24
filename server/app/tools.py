@@ -154,6 +154,9 @@ async def update_todo(args: dict[str, Any]) -> dict[str, Any]:
     if not sets:
         return _err("Nothing to change.")
     n = db.run(f"UPDATE todos SET {', '.join(sets)} WHERE id=?", (*vals, args["id"]))
+    if n and args.get("done"):
+        from . import hub  # (imported here, as in the other tools that reach the pet)
+        await hub.broadcast({"type": "cheer"})  # the pet gives a thumbs up
     return _ok("Updated.") if n else _err("No todo with that id.")
 
 
@@ -299,6 +302,9 @@ async def set_preference(args: dict[str, Any]) -> dict[str, Any]:
         stored = prefs.put(args["key"], args["value"])
     except ValueError as e:
         return _err(str(e))
+    if args["key"] == "stay_on_screen":
+        from . import hub
+        await hub.sync_stay()
     return _ok(f"{args['key']} is now {stored}.")
 
 

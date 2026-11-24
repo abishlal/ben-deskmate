@@ -46,7 +46,8 @@
 
   function paint() {
     pet.className = anim + (facingLeft ? ' left' : '') + (present ? '' : ' away') + (window.ben3d ? ' three' : '')
-      + (held || flying ? ' physics' : '') + (lifting ? ' lifting' : '');
+      + (held || flying ? ' physics' : '') + (lifting ? ' lifting' : '')
+      + (instant ? ' instant' : '') + (entrance && entrance.kind === 'umbrella' ? ' floating' : '') + (offEdge ? ' off-edge' : '');
   }
   // While he is held, flying or dizzy the drag-and-throw code owns the animation; the rest waits (recover() catches up).
   function setAnim(name, force = false) { if (!force && (held || flying || stunned)) return; anim = name; paint(); }
@@ -59,40 +60,251 @@
   // x and y above stay relative to that screen's work area: x from its left edge, y up from its taskbar.
   let displays = null, homeId = null;
 
-  function arrive() {
+  // ---------------------------------------------------------------- entrances, exits, reminder poses
+  // How he comes up: 'rise' (from behind the taskbar), 'rope' (slides down a rope from the top of the screen),
+  // 'umbrella' (floats down) or 'peek' (leans in from the right edge of the screen, then walks in).
+  // Leaving: after peeking in he walks off the edge; after the rope he walks off a side or hops down behind the
+  // taskbar; otherwise a wave and down behind the taskbar.
+  const ENTRANCE_FOR = { nudge: 'rope', meeting: 'rope', briefing: 'umbrella', followup: 'umbrella' };
+  const ACT_FOR = { water: 'water', break: 'stretch', meeting: 'watch', reminder: 'watch', nudge: 'clipboard', focus: 'happy' };
+  const NIGHT_FROM = 20, NIGHT_UNTIL = 6;   // the hours he is sleepy and has a mug
+  const MOVING = new Set(['talk', 'wave', 'held', 'fly', 'dizzy', 'look', 'climb', 'float', 'peek', 'walk', 'run', 'water', 'sip',
+    'stretch', 'watch', 'clipboard', 'happy', 'startle', 'yawn']);
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let entrance = null;   // { kind, phase, t0, state } while he is coming in
+  let exiting = null;    // { kind, phase, t0, state } while he is going
+  let stroll = null;     // { to, speed, done } a walk to a spot (peeking in, walking off)
+  let cameBy = 'rise';
+  let act = null;        // { state } the pose for the reminder he is showing (water glass, stretch, ...)
+  let oneShot = null;    // { state, until } a short move (sip, startle, yawn, thumbs up)
+  let intro = null;      // { state, until } a wave or a look round just after coming up
+  let instant = false, offEdge = false;
+  let lookX = 0, lookY = 0, lookAt = 0;
+  let waterAsked = 0;    // until when "done" still means "I drank it" after the water reminder
+  const rope = $('rope'), umbrella = $('umbrella');
+  const night = () => { const h = new Date().getHours(); return h >= NIGHT_FROM || h < NIGHT_UNTIL; };
+  const home = () => Math.max(0, innerWidth - HOME_FROM_RIGHT);
+  const fancy = () => !!window.ben3d && !reducedMotion;   // the drawn avatar only rises and sinks
+
+  function arrive(how = 'rise') {
     clearTimeout(leaveTimer);
+    if (exiting) cancelExit();
     if (present) return;
-    if (!settings.stay) { x = Math.max(0, innerWidth - HOME_FROM_RIGHT); facingLeft = true; targetX = null; }
-    present = true; place(); paint();
-    waveUntil = performance.now() + 1500;   // the 3D Ben waves hello as he comes up
+    if (!settings.stay) { x = home(); facingLeft = true; targetX = null; }
+    present = true;
+    cameBy = fancy() ? how : 'rise';
+    const now = performance.now();
+    if (cameBy === 'rise') {
+      place(); paint();
+      // the 3D Ben waves hello as he comes up; for a message of his own he looks round first
+      intro = mode === 'listen' || mode === 'think' ? { state: 'wave', until: now + 1500 } : { state: 'look', until: now + 1300 };
+      setTimeout(() => { if (present && !held && !flying) { squash(450, performance.now()); } }, 380);   // a small bounce at the top
+      return;
+    }
+    entrance = { kind: cameBy, phase: 'start', t0: now, state: 'idle' };
+    flash();
+    if (cameBy === 'peek') {
+      x = area().width - 35; facingLeft = true;
+      entrance.phase = 'peek'; entrance.state = 'peek';
+    } else {
+      setLift(true);
+      y = topY() + (cameBy === 'rope' ? 170 : 110);
+      entrance.state = cameBy === 'rope' ? 'climb' : 'float';
+    }
+    place(); paint();
   }
 
+  /** Just above the top of the desktop, in his y (up from the taskbar). */
+  const topY = () => (lifted && displays ? area().height : stage.clientHeight);
+  /** No rise-and-sink transition for a moment (he appears or goes somewhere out of sight instead). */
+  function flash() { instant = true; paint(); setTimeout(() => { instant = false; paint(); }, 450); }
+
+  function showRope(bottom) {   // bottom: how far down the stage the rope reaches, in px from its top
+    rope.hidden = false;
+    rope.style.transform = `translateX(${(x + 57).toFixed(1)}px)`;
+    rope.style.height = `${Math.max(0, bottom).toFixed(1)}px`;
+  }
+  const hideRope = () => { rope.hidden = true; rope.style.height = '0px'; };
+  const ease = (p) => (p < 0 ? 0 : p > 1 ? 1 : p * p * (3 - 2 * p));
+
+  function stepEntrance(now, dt) {
+    const e = entrance;
+    if (held || flying) { abortMotion(); return; }   // picked up on the way in
+    if (lifting) { e.t0 = now; return; }              // wait until the window has grown
+    const s = (now - e.t0) / 1000, H = stage.clientHeight;
+    if (e.kind === 'rope') {
+      // The rope comes down halfway; he slides to its end, hangs for a moment, then jumps down to the taskbar.
+      const end = H * 0.5, hangY = Math.max(0, H - end - 62);   // his height when his hands are at the end
+      if (e.phase === 'start') {          // the rope drops from the top of the screen
+        showRope(end * ease(s / 0.4));
+        if (s > 0.4) { e.phase = 'slide'; e.t0 = now; e.from = y; e.dur = Math.min(1.6, Math.max(0.8, (y - hangY) / 650)); }
+      } else if (e.phase === 'slide') {   // he slides down it, hand over hand
+        const p = Math.min(1, s / e.dur);
+        y = hangY + (e.from - hangY) * (1 - ease(p)) + Math.max(0, Math.sin(s * 14)) * 6 * (1 - p);
+        showRope(end);
+        if (p >= 1) { y = hangY; e.phase = 'hang'; e.t0 = now; }
+      } else if (e.phase === 'hang') {    // a little swing at the end of the rope
+        y = hangY + Math.sin(s * 9) * 3;
+        showRope(end);
+        if (s > 0.45) { e.phase = 'jump'; e.t0 = now; e.vy = 260; e.state = 'fly'; }
+      } else {                            // lets go: a hop up, then down to the taskbar while the rope goes back up
+        e.vy -= GRAVITY * dt; y += e.vy * dt;
+        showRope(end * (1 - ease(s / 0.4)));
+        if (y <= 0) { y = 0; squash(Math.min(900, -e.vy * 0.6), now); hideRope(); endEntrance(now); }
+      }
+    } else if (e.kind === 'umbrella') {   // drifting down, swaying, slowing near the ground
+      if (e.phase === 'start') { e.phase = 'float'; e.x0 = x; }
+      const speed = 240 * Math.min(1, 0.35 + y / 260);
+      y = Math.max(0, y - speed * dt);
+      x = e.x0 + Math.sin(s * 1.7) * 22;
+      if (y <= 0) { squash(300, now); x = e.x0; endEntrance(now); }
+    } else if (e.kind === 'peek') {
+      if (e.phase === 'peek' && s > 1.6) {   // had a look: walk in
+        e.phase = 'walk'; e.state = 'walk'; facingLeft = true;
+        stroll = { to: home(), speed: 130, done: () => endEntrance(performance.now()) };
+      }
+    }
+    place();
+  }
+
+  function endEntrance(now) {
+    const kind = entrance && entrance.kind;
+    entrance = null; stroll = null; hideRope();
+    if (kind === 'rope' || kind === 'umbrella') setLift(false);
+    intro = act ? null : { state: 'wave', until: now + 1300 };
+    paint(); place();
+  }
+
+  /** Grabbed, dismissed or called back while on the move: drop whatever entrance or exit is running. */
+  function abortMotion() {
+    const wasLifted = entrance && entrance.kind !== 'peek';
+    entrance = null; exiting = null; stroll = null; hideRope();
+    if (wasLifted && !held && !flying && y <= 0) setLift(false);
+    paint();
+  }
+
+  function leave() {
+    if (settings.stay || !present || exiting) return;
+    if (!fancy() || held || flying || stunned) { hide(); return; }
+    const now = performance.now();
+    act = null; oneShot = null; intro = null;
+    youText = replyText = ''; render();
+    // after the rope: walk off the nearer side of the screen, or hop and drop down behind the taskbar
+    const how = cameBy === 'peek' ? 'walk' : cameBy === 'rope' ? pick(['walk', 'hop']) : 'wave';
+    if (how === 'walk') {
+      exiting = { kind: 'walk', phase: 'walk', t0: now, state: 'walk' };
+      const right = cameBy === 'peek' || x + 60 > area().width / 2;
+      facingLeft = !right;
+      stroll = { to: right ? area().width + 20 : -140, speed: 150, done: () => hide(true) };
+    } else if (how === 'hop') {
+      exiting = { kind: 'hop', phase: 'hop', t0: now, state: 'startle' };
+    } else {
+      exiting = { kind: 'wave', phase: 'wave', t0: now, state: 'wave' };
+    }
+    paint();
+  }
+
+  function stepExit(now) {
+    const e = exiting;
+    if (held || flying) { abortMotion(); return; }
+    if (lifting) { e.t0 = now; return; }
+    const s = (now - e.t0) / 1000, H = stage.clientHeight;
+    if (e.kind === 'wave') { if (s > 0.8) hide(); return; }
+    if (e.kind === 'hop') {               // a hop up, and down he goes behind the taskbar
+      y = Math.max(0, Math.sin(Math.min(1, s / 0.45) * Math.PI) * 45);
+      place();
+      if (s > 0.45) { y = 0; hide(); }
+    }
+  }
+
+  /** Called back while leaving: stay. Walking off, he turns round and comes back. */
+  function cancelExit() {
+    const e = exiting;
+    exiting = null; stroll = null;
+    if (e.kind === 'hop') { y = 0; place(); }
+    else if (e.kind === 'walk') { const to = Math.min(Math.max(0, x), Math.max(0, area().width - 120)); facingLeft = to < x; stroll = { to, speed: 150, done: null }; }
+    paint();
+  }
+
+  /** Out of sight at once. offstage: he is already off the screen (walked past the edge), so no sinking. */
+  function hide(offstage = false) {
+    const wasLifted = entrance && entrance.kind !== 'peek';
+    entrance = null; exiting = null; stroll = null; act = null; oneShot = null; intro = null; hideRope();
+    if (offstage) flash();
+    present = false; offEdge = false;
+    if (offstage || wasLifted) y = 0;
+    if (offstage) x = home();
+    if (wasLifted) setLift(false);
+    paint(); place();
+    shell && shell.setIgnoreMouse(true);
+  }
+
+  /** The pose for a reminder, held while its message is up. */
+  function startAct(kind) {
+    const state = ACT_FOR[kind];
+    act = state && fancy() ? { state, kind } : null;
+  }
+
+  /** "Done" (or a click on him) while he holds out the water: he has a sip too. */
+  function drinkUp() {
+    const now = performance.now();
+    if (!(act && act.state === 'water') && now > waterAsked) return false;
+    waterAsked = 0;
+    oneShot = { state: 'sip', until: now + 2600 };
+    setTimeout(() => {
+      if (!present) return;
+      act = null; oneShot = { state: 'happy', until: performance.now() + 1700 };
+      say(pick(['Cheers!', 'Ahh, much better.', 'Nice one!']), 2500);
+    }, 2600);
+    return true;
+  }
+  const DRANK = /\b(done|drank|drunk|had (it|some)|finished|cheers|ok(ay)?)\b/i;
+
+  /** A short move on top of everything but being carried or thrown. */
+  function play(state, ms) { if (fancy() && present) oneShot = { state, until: performance.now() + ms }; }
+
   // The 3D Ben (pet3d.js sets window.ben3d when WebGL works) follows the same states as the drawn one.
-  let waveUntil = 0;
+  function benState(now) {
+    if (anim === 'held' || anim === 'fly' || anim === 'dizzy') return anim;
+    if (entrance) return entrance.state;
+    if (exiting) return exiting.state;
+    if (stroll) return 'walk';
+    if (oneShot) { if (now < oneShot.until) return oneShot.state; oneShot = null; }
+    let state = { listen: 'listen', think: 'think', talk: 'talk', sleep: 'sleep', walk: 'walk', run: 'run', sit: 'sit', type: 'think' }[anim]
+      || (quiet() ? 'quiet' : night() ? 'sleepy' : 'idle');
+    const busy = mode === 'think' || (mode === 'listen' && !followUp);
+    if (act && !busy) state = act.state;
+    if (intro) {
+      if (now > intro.until) intro = null;
+      else if (['idle', 'sleepy', 'quiet', 'listen'].includes(state) || (act && state === act.state)) state = intro.state;
+    }
+    return state;
+  }
+
   function syncBen(now, level) {
     const ben = window.ben3d;
     if (!ben) return;
     if (!present) { ben.pause(); return; }   // out of sight: no rendering
     ben.resume();
-    let state = { listen: 'listen', think: 'think', talk: 'talk', sleep: 'sleep', held: 'held', fly: 'fly', dizzy: 'dizzy' }[anim] || (quiet() ? 'quiet' : 'idle');
-    if (now < waveUntil && (state === 'idle' || state === 'listen')) state = 'wave';
+    const state = benState(now);
     ben.setState(state);
-    ben.setFps(['talk', 'wave', 'held', 'fly', 'dizzy'].includes(state) ? 24 : 12);   // he renders in software: keep it light
+    ben.setFps(MOVING.has(state) ? 24 : 12);   // he renders in software: keep it light
     if (ben.setAirborne) ben.setAirborne(held || y > 2);
     ben.setTalkLevel(level);
-  }
-
-  function leave() {
-    if (settings.stay || !present) return;
-    present = false; paint();
-    shell && shell.setIgnoreMouse(true);
+    if (ben.setSpeaking) {
+      ben.setSpeaking(playing);
+      ben.setFacing(facingLeft ? -1 : 1);
+      if (ben.setNight) ben.setNight(night());
+      if (now - lookAt > 4000) { lookX *= 0.9; lookY *= 0.9; }   // the pointer went still or away: back to looking ahead
+      ben.setLook(lookX, lookY);
+    }
   }
 
   function leaveSoon(ms) {
     clearTimeout(leaveTimer);
     if (settings.stay) return;
     leaveTimer = setTimeout(() => {
-      if (mode !== 'ambient' && mode !== 'sleep' || !typeForm.hidden || playing || held || flying || stunned) { leaveSoon(3000); return; }
+      if (mode !== 'ambient' && mode !== 'sleep' || !typeForm.hidden || playing || held || flying || stunned || entrance) { leaveSoon(3000); return; }
       youText = replyText = ''; render(); leave();
     }, ms);
   }
@@ -100,6 +312,11 @@
   function setMode(next) {
     mode = next;
     targetX = null;
+    if (next === 'think' || (next === 'listen' && !followUp)) {   // a new request: the reminder pose is over
+      if (act && act.state === 'water') waterAsked = performance.now() + 120000;   // "done" can still come
+      act = null;
+      if (intro && intro.state === 'look') intro.state = 'wave';   // called up: wave hello rather than look round
+    }
     if (next === 'listen' || next === 'think' || next === 'talk') arrive();
     if (next === 'ambient') {
       setAnim('idle'); nextDecision = performance.now() + 3000 + Math.random() * 3000;
@@ -112,7 +329,11 @@
 
   function place() {
     const max = Math.max(0, area().width - 120);
-    x = Math.min(max, Math.max(0, x));
+    // Peeking in or walking off, he may be partly past an edge of the screen.
+    const pastEdge = (entrance && entrance.kind === 'peek') || (exiting && exiting.kind === 'walk') || (stroll && (stroll.to > max || stroll.to < 0));
+    x = pastEdge ? Math.min(max + 140, Math.max(-140, x)) : Math.min(max, Math.max(0, x));
+    const beyond = x > max + 1 || x < -1;
+    if (beyond !== offEdge) { offEdge = beyond; paint(); }   // the bubble waits until he is on the screen
     pet.style.transform = `translate(${x}px, ${-y}px)`;
     bubble.classList.toggle('edge-left', x < 110);
     bubble.classList.toggle('edge-right', x > max - 110);
@@ -122,18 +343,30 @@
     floorShadow.style.transform = `translateX(${x}px) scale(${(1 - high * 0.5).toFixed(2)})`;
   }
 
+  /** What he does next while on screen with nothing to do (stay mode): wander, sit, code a bit, yawn. */
   function decide(now) {
-    const r = Math.random();
-    if (r < 0.5) {
+    const r = Math.random(), late = night();
+    if (r < (late ? 0.25 : 0.45)) {
       targetX = Math.random() * Math.max(0, innerWidth - 120);
-      const run = Math.random() < 0.2;
+      const run = !late && Math.random() < 0.2;
       speed = run ? 190 : 55;
       facingLeft = targetX < x;
       setAnim(run ? 'run' : 'walk');
-    } else {
-      setAnim(r < 0.8 ? 'sit' : 'idle');
-      nextDecision = now + 5000 + Math.random() * 9000;
+      return;
     }
+    if (r < 0.68) setAnim('sit');
+    else if (r < 0.8 && !late) setAnim('type');
+    else if (r < 0.9) { setAnim('idle'); play('yawn', 2100); }
+    else setAnim('idle');
+    nextDecision = now + 5000 + Math.random() * 9000;
+  }
+
+  function stepStroll(dt) {
+    const step = stroll.speed * dt, gap = stroll.to - x;
+    facingLeft = gap < 0;
+    if (Math.abs(gap) <= step) { x = stroll.to; const done = stroll.done; stroll = null; if (done) done(); }
+    else x += Math.sign(gap) * step;
+    place();
   }
 
   function frame(now) {
@@ -141,7 +374,16 @@
     lastFrame = now;
     const moved = present && physics(dt, now);
     if (pose(now) || moved) place();
-    if (settings.stay && present && mode === 'ambient' && bubble.hidden && !held && !flying && !stunned) {   // wandering only in stay mode
+    if (present && (entrance || exiting || stroll)) {
+      if (held || flying) abortMotion();             // picked up on the way in or out
+      else {
+        if (entrance) stepEntrance(now, dt);
+        else if (exiting) stepExit(now);
+        if (stroll) stepStroll(dt);
+      }
+    }
+    if (act && bubble.hidden && !entrance && !oneShot) act = null;   // the reminder's message has gone
+    if (settings.stay && present && mode === 'ambient' && bubble.hidden && !held && !flying && !stunned && !entrance && !exiting && !stroll) {   // wandering only in stay mode
       if (targetX !== null) {
         const step = speed * dt, gap = targetX - x;
         if (Math.abs(gap) <= step) { x = targetX; targetX = null; setAnim('idle'); nextDecision = now + 1500 + Math.random() * 5000; }
@@ -603,9 +845,9 @@
     youText = replyText = ''; render();
     setMode('ambient');
     clearTimeout(leaveTimer);
-    if (held || flying || stunned) return;   // mid-air: he lands, then leaves on his own
-    present = false; paint();
-    shell && shell.setIgnoreMouse(true);
+    act = null; oneShot = null;
+    if (held || flying || stunned) { abortMotion(); return; }   // mid-air: he lands, then leaves on his own
+    hide();
   }
 
   function openTypeBox() {
@@ -621,6 +863,7 @@
     if (!connected) return;
     audio(); arrive();
     voiceTurn = false; turnDone = false; youText = text; replyText = ''; render();
+    if (DRANK.test(text)) drinkUp();
     ws.send(JSON.stringify({ type: 'text', text, speak: !settings.muted }));
   }
 
@@ -651,10 +894,31 @@
     else { arrive(); say("I'm not connected to my server, so I can't switch silent mode.", 4000); leaveSoon(4500); }
   }
 
+  /** "Stay on screen", as stored on the server (voice, the settings page, the tray menu or Claude changed it). */
   function setStay(on) {
+    shell && shell.stay && shell.stay(on);   // so the tray menu's tick matches
+    if (settings.stay === on) return;
     settings.stay = on; store.set('stay', on ? '1' : '0');
     if (on) { arrive(); if (mode === 'ambient') setMode('ambient'); }
     else if (mode === 'ambient' || mode === 'sleep') leaveSoon(800);
+  }
+
+  /** A reminder, nudge or briefing. How he comes up and what he holds depend on its kind; when he has to be
+      discreet (silent mode, a call, a meeting) he only peeks in from the edge of the screen. */
+  function onNotify(m) {
+    const how = silent || quiet() ? 'peek' : ENTRANCE_FOR[m.kind] || 'rise';
+    arrive(how);
+    startAct(m.kind);
+    youText = ''; replyText = m.body; render(); turnDone = true;
+    if (m.toast !== false) shell && shell.notify(m.title, m.body);   // (demos skip the Windows notification)
+    voiceTurn = settings.handsfree;      // so "snooze that ten minutes" works straight after
+    if (m.has_audio && quiet()) skipAudio++;   // paused or on a call: show it, do not say it aloud
+    if (!m.has_audio || settings.muted || quiet()) {
+      const ms = silent ? Math.max(12000, readMs(m.body)) : 12000;
+      if (mode === 'ambient' || mode === 'sleep') { setMode('ambient'); leaveSoon(ms); }
+      hideLater(ms);
+    }
+    else if (mode === 'ambient' || mode === 'sleep') setMode('talk');
   }
 
   // ---------------------------------------------------------------- server connection
@@ -680,6 +944,9 @@
         case 'hello':
           connected = true; wakeEngine = !!m.wake_engine; inMeeting = !!m.meeting_quiet; setMode('ambient');
           setSilent(!!m.silent);
+          if (m.stay === null || m.stay === undefined) {   // the server has never stored it: hand over the old local value
+            if (settings.stay) ws.send(JSON.stringify({ type: 'stay_set', on: true }));
+          } else setStay(!!m.stay);
           ws.send(JSON.stringify({ type: 'client', host: !!(shell && shell.hostCall) }));
           if (settings.handsfree) ensureMic();
           if (!m.voice) { arrive(); say('My voice service is offline, so I can only type for now.', 6000); leaveSoon(7000); }
@@ -687,7 +954,10 @@
         case 'state':
           if (m.state === 'thinking') { turnDone = false; replyText = ''; if (mode !== 'listen') setMode('think'); }
           break;
-        case 'transcript': youText = m.text; replyText = ''; render(); break;
+        case 'transcript':
+          youText = m.text; replyText = ''; render();
+          if (DRANK.test(m.text || '')) drinkUp();   // "done", after the water reminder
+          break;
         case 'reply_delta':   // the answer has started: no more resuming
           lastSent = null; replyText += m.text; render(); clearTimeout(hideTimer);
           break;
@@ -695,19 +965,8 @@
           turnDone = true; replyText = m.text; render();
           if (!playing) finishTurn();
           break;
-        case 'notify':   // a reminder, nudge or briefing: come up and say it
-          arrive();
-          youText = ''; replyText = m.body; render(); turnDone = true;
-          shell && shell.notify(m.title, m.body);
-          voiceTurn = settings.handsfree;      // so "snooze that ten minutes" works straight after
-          if (m.has_audio && quiet()) skipAudio++;   // paused or on a call: show it, do not say it aloud
-          if (!m.has_audio || settings.muted || quiet()) {
-            const ms = silent ? Math.max(12000, readMs(m.body)) : 12000;
-            if (mode === 'ambient' || mode === 'sleep') { setMode('ambient'); leaveSoon(ms); }
-            hideLater(ms);
-          }
-          else if (mode === 'ambient' || mode === 'sleep') setMode('talk');
-          break;
+        case 'notify': onNotify(m); break;   // a reminder, nudge or briefing: come up and say it
+        case 'cheer': if (present) play('happy', 1800); break;   // a task was just marked done
         case 'silent':   // silent mode switched: by the hotkey, a setting, or office hours starting or ending
           setSilent(!!m.on);
           if ((m.announce || m.changed) && (mode === 'ambient' || mode === 'sleep')) {
@@ -716,6 +975,9 @@
             arrive(); say(text, 4000);
             if (!settings.stay) leaveSoon(4500);
           }
+          break;
+        case 'stay':   // "stay on screen" / "turn off stay on screen", said or typed
+          setStay(!!m.on);
           break;
         case 'meeting_quiet':   // a calendar meeting started or ended
           inMeeting = !!m.on;
@@ -990,7 +1252,25 @@
 
   // ---------------------------------------------------------------- input wiring
   let clickTimer = 0;
-  $('flip').addEventListener('click', () => { if (suppressClick) return; clearTimeout(clickTimer); clickTimer = setTimeout(talk, 240); });
+  $('flip').addEventListener('click', () => {
+    if (suppressClick) return;
+    clearTimeout(clickTimer);
+    if (drinkUp()) return;                         // holding out the water: a click means "done, I drank it"
+    // poked while busy with his own thing (sitting, napping, wandering, coding): he jumps, then listens
+    if ((mode === 'ambient' || mode === 'sleep') && ['sit', 'sleep', 'type', 'walk', 'run'].includes(anim)) {
+      targetX = null; setAnim('idle'); play('startle', 750);
+      quip(pick(['Whoa! Oh, hi!', 'Huh? I\'m up!', 'You scared me!']), 1500);
+    }
+    clickTimer = setTimeout(talk, 240);
+  });
+  // His eyes follow the mouse pointer when it is near him (the shell forwards mouse moves even while clicks go through).
+  addEventListener('mousemove', (e) => {
+    if (!present) return;
+    const r = $('flip').getBoundingClientRect();
+    const dx = (e.clientX - (r.left + 60)) / 260, dy = (e.clientY - (r.top + 45)) / 260;
+    if (Math.hypot(dx, dy) > 2.6) return;          // too far away to notice
+    lookX = dx; lookY = dy; lookAt = performance.now();
+  });
   $('flip').addEventListener('dblclick', () => { if (suppressClick) return; clearTimeout(clickTimer); openTypeBox(); });
 
   typeForm.addEventListener('submit', (e) => { e.preventDefault(); const t = typeBox.value.trim(); closeTypeBox(); if (t) sendText(t); });
@@ -1007,7 +1287,10 @@
       else if (cmd === 'handsfree') setHandsfree(!!value);
       else if (cmd === 'mute') setMuted(!!value);
       else if (cmd === 'silent') toggleSilent();
-      else if (cmd === 'stay') setStay(!!value);
+      else if (cmd === 'stay') {   // the tray tick: store it on the server, which tells every pet
+        setStay(!!value);
+        if (connected && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stay_set', on: !!value }));
+      }
       else if (cmd === 'pause') setPaused(!!value);
       else if (cmd === 'incall') setInCall(!!value);
       else if (cmd === 'dictate') toggleDictation();
@@ -1035,5 +1318,8 @@
     state: () => ({ screen: homeId, mode, connected, present, followUp, paused, inCall, inMeeting, silent, dictating, capturing, wakeEngine, micReady, x: Math.round(x), y: Math.round(y), held, flying, stunned, cls: pet.className, bubble: bubble.hidden ? null : bubbleText.textContent }),
     fling: (sx, sy, fromY = 200) => { arrive(); setLift(true); held = true; y = fromY; samples = [{ t: performance.now() - 50, x, y }, { t: performance.now(), x: x + sx / 20, y: y + sy / 20 }]; release(); },
     sendText, talk, dismiss, setStay, toggleSilent, arrive, setAnim, toggleDictation, toggleCapture, setMode, feed: onBlock,
+    // e.g. __pet.notify({ kind: 'water', title: 'Drink water', body: 'Time for some water.' }) to try an entrance and pose
+    notify: (m) => onNotify({ title: '', body: '', has_audio: false, ...m }), leave, play, drinkUp,
+    motion: () => ({ entrance: entrance && entrance.kind, exiting: exiting && exiting.kind, act: act && act.state, oneShot: oneShot && oneShot.state, ben: window.ben3d && window.ben3d.state, lifted }),
   };
 })();

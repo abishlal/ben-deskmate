@@ -9,6 +9,7 @@
 <body>
 <div id="stage">
   <div id="floor-shadow"></div>
+  <div id="rope" hidden></div>
   <div id="pet" class="sleep away" title="Click to talk · double-click to type">
     <div id="rise">
       <div id="bubble" hidden>
@@ -16,6 +17,12 @@
         <form id="type-form" hidden><input id="type-box" placeholder="Type to me…" autocomplete="off"></form>
       </div>
       <div id="stars" aria-hidden="true"><span>✦</span><span>✦</span><span>✦</span></div>
+      <svg id="umbrella" viewBox="0 0 120 130" width="120" height="130" aria-hidden="true">
+        <path class="canopy" d="M5 40 Q60 -22 115 40 Q101 31 87 40 Q73 31 60 40 Q47 31 33 40 Q19 31 5 40 Z"/>
+        <path class="ribs" d="M60 9 L33 40 M60 9 L60 40 M60 9 L87 40"/>
+        <circle class="tip" cx="60" cy="8" r="3"/>
+        <path class="handle" d="M60 39 V116 q0 9 -7 9 q-7 0 -7 -7"/>
+      </svg>
       <div id="flip">
         <svg id="sprite" viewBox="0 0 120 150" width="120" height="150" aria-hidden="true">
           <ellipse class="shadow" cx="60" cy="144" rx="30" ry="5"/>

@@ -162,6 +162,11 @@ def drop(ws: WebSocket) -> None:
         host_caps = {}
 
 
+async def sync_stay() -> None:
+    """Tell the pets the "Stay on screen" setting (it changed by voice, the settings page, the tray or Claude)."""
+    await broadcast({"type": "stay", "on": prefs.enabled("stay_on_screen")})
+
+
 _silent: tuple[bool, str] | None = None  # the silent-mode state the pets were last told
 
 

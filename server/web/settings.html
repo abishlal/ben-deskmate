@@ -65,6 +65,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 // How the settings are grouped and named on this page. Any setting not listed here appears under "Other".
 const GROUPS = [
   ['Silent mode', ['silent_mode', 'office_days']],
+  ['On screen', ['stay_on_screen']],
   ['You and your day', ['user_name', 'work_start', 'work_end']],
   ['Quiet hours', ['quiet_start', 'quiet_end']],
   ['Briefing and wrap-up', ['briefing_enabled', 'briefing_time', 'wrapup_enabled', 'wrapup_time']],
@@ -73,7 +74,7 @@ const GROUPS = [
   ['Tasks and writing', ['stale_task_days', 'writing_style']],
 ];
 const LABELS = {
-  silent_mode: 'Silent mode', office_days: 'Office days',
+  silent_mode: 'Silent mode', office_days: 'Office days', stay_on_screen: 'Stay on screen',
   user_name: 'Your name', work_start: 'Work starts', work_end: 'Work ends',
   quiet_start: 'Quiet hours start', quiet_end: 'Quiet hours end',
   briefing_enabled: 'Morning briefing', briefing_time: 'Briefing time',
@@ -85,6 +86,7 @@ const LABELS = {
 };
 const HINTS = {
   silent_mode: 'Shows every message in the speech bubble instead of speaking it. Office days: silent during work hours on the days below.',
+  stay_on_screen: 'On: he stays on the screen all the time. Off: he comes up only when you call him or have something to tell you, and hides again when done.',
   office_days: 'Used when silent mode is set to office days, between the work hours under "You and your day".',
 };
 const DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
@@ -100,7 +102,7 @@ function control(key, value) {
     return `<div class="seg" role="group" aria-label="Office days">${DAYS.map(([v, t]) =>
       `<label><input type="checkbox" name="office_days" value="${v}" ${on.includes(v) ? 'checked' : ''}>${t}</label>`).join('')}</div>`;
   }
-  if (key.endsWith('_enabled')) {
+  if (key.endsWith('_enabled') || key === 'stay_on_screen') {
     return `<span class="switch"><input type="checkbox" id="f-${key}" ${value === 'on' ? 'checked' : ''}><span></span></span>`;
   }
   if (/_(time|start|end)$/.test(key)) return `<input type="time" id="f-${key}" value="${esc(value)}">`;
@@ -141,6 +143,7 @@ function render() {
   $('main').innerHTML = groups.map(([name, keys], i) => `<section><h2>${esc(name)}</h2>
     ${i === 0 ? `<div id="silent-now"></div><p class="ways">Also: <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>M</kbd>, the tray menu, or say
       "silent mode on" / "silent mode off". On an office day those switch it for that day only.</p>` : ''}
+    ${name === 'On screen' ? `<p class="ways">Also: the tray menu, or say "stay on screen" / "turn off stay on screen".</p>` : ''}
     ${keys.filter((k) => k in data.values).map(field).join('')}</section>`).join('');
   showSilent();
   document.querySelectorAll('.field').forEach((box) => {
@@ -177,14 +180,16 @@ async function load() {
   }
 }
 
-// Keep the "silent now" line current (office hours start and end, the hotkey) without touching the form.
+// Keep the "silent now" line and the "Stay on screen" switch current (office hours, the hotkey, voice) without touching the rest of the form.
 setInterval(async () => {
   if (!data) return;
   try { const fresh = await (await fetch('/api/settings')).json(); data.silent = fresh.silent; data.values.silent_mode = fresh.values.silent_mode;
     const radio = document.querySelector(`input[name=silent_mode][value="${fresh.values.silent_mode}"]`);
     if (radio) radio.checked = true;
+    data.values.stay_on_screen = fresh.values.stay_on_screen;   // switched by voice or the tray meanwhile
+    const stay = $('f-stay_on_screen'); if (stay) stay.checked = fresh.values.stay_on_screen === 'on';
     showSilent(); } catch {}
-}, 15000);
+}, 5000);
 load();
 </script>
 </body>

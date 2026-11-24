@@ -26,6 +26,25 @@ body.browser #stage { bottom: 40px; }
 #pet.physics, #pet.physics #flip { cursor: grabbing; }
 #pet.lifting { visibility: hidden; }   /* for the frame or two while the window grows or shrinks */
 
+/* --- entrances and exits (pet.js) --- */
+#pet.instant #rise, #pet.instant.away #rise { transition: none; }
+/* the rope he slides down from the top of the screen; behind him, so his hands are in front of it */
+#rope {
+  position: absolute; top: 0; left: 0; width: 6px; height: 0; pointer-events: none; border-radius: 3px;
+  background: repeating-linear-gradient(160deg, #b98a4e 0 4px, #8a6033 4px 7px); box-shadow: 1px 0 1px rgba(0,0,0,.25);
+}
+#rope[hidden] { display: none; }
+/* the umbrella he floats down under; his raised hand holds the handle */
+#umbrella { position: absolute; left: 26px; top: -79px; display: none; pointer-events: none; overflow: visible; transform-origin: 60px 125px; }
+#umbrella .canopy { fill: #e0574c; stroke: #a8392f; stroke-width: 1.5; stroke-linejoin: round; }
+#umbrella .ribs { fill: none; stroke: #a8392f; stroke-width: 1.2; }
+#umbrella .tip { fill: #3a2f28; }
+#umbrella .handle { fill: none; stroke: #3a2f28; stroke-width: 3; stroke-linecap: round; }
+#pet.floating #umbrella { display: block; animation: sway 1.8s ease-in-out infinite; }
+@keyframes sway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+/* while floating down or still past the screen edge, the bubble waits */
+#pet.floating #bubble, #pet.off-edge #bubble { visibility: hidden; }
+
 /* --- drag and throw --- */
 body.lifted #stage { top: 0; height: auto; }
 #floor-shadow {

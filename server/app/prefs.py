@@ -27,6 +27,7 @@ DEFAULTS = {
     "writing_style": "",
     "silent_mode": os.getenv("PET_SILENT_MODE", "off"),
     "office_days": os.getenv("PET_OFFICE_DAYS", "mon,tue,wed,thu,fri"),
+    "stay_on_screen": os.getenv("PET_STAY_ON_SCREEN", "off"),
 }
 DESCRIPTIONS = {
     "briefing_enabled": "morning briefing on or off",
@@ -52,6 +53,8 @@ DESCRIPTIONS = {
                    "off, on (always silent) or office_days (silent during work hours on the office days)",
     "office_days": "the weekdays the user works from the office, for silent_mode office_days, "
                    "comma-separated, for example mon,wed,thu",
+    "stay_on_screen": "on: the pet stays on the screen all the time; off: it comes up only when called or when it "
+                      "has something to say, and hides again when done",
 }
 
 
@@ -87,7 +90,7 @@ def put(key: str, value: str) -> str:
         if not days or any(d not in WEEKDAYS for d in days):
             raise ValueError("List weekdays like mon,wed,thu.")
         value = ",".join(d for d in WEEKDAYS if d in days)
-    elif key.endswith("_enabled"):
+    elif key.endswith("_enabled") or key == "stay_on_screen":
         if value.lower() not in ("on", "off"):
             raise ValueError("Use on or off.")
         value = value.lower()
@@ -95,6 +98,11 @@ def put(key: str, value: str) -> str:
     if key in ("silent_mode", "office_days"):
         db.kv_set(_SILENT_OVERRIDE, "")  # a new rule replaces a switch made for today
     return value
+
+
+def is_set(key: str) -> bool:
+    """Whether the user has ever stored this setting (otherwise get() gives the default)."""
+    return db.kv_get(f"pref:{key}") is not None
 
 
 def clock(key: str) -> time:

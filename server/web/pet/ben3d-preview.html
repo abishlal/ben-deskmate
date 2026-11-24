@@ -24,7 +24,9 @@
 <script type="module">
   import { createBen } from './ben3d.js';
   const ben = createBen(document.getElementById('stage'), { orbit: true });
-  const states = ['idle', 'wave', 'listen', 'think', 'talk', 'quiet', 'sleep'];
+  const states = ['idle', 'wave', 'listen', 'think', 'talk', 'quiet', 'sleep',
+    'look', 'climb', 'float', 'peek', 'walk', 'run', 'water', 'sip', 'stretch', 'watch', 'clipboard', 'happy',
+    'startle', 'sit', 'yawn', 'sleepy'];
   const bar = document.getElementById('bar');
   for (const s of states) {
     const b = document.createElement('button');

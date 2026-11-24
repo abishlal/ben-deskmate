@@ -134,6 +134,8 @@ async def save_settings(request: Request) -> dict:
         if value != prefs.get(key):
             try:
                 prefs.put(key, str(value))
+                if key == "stay_on_screen":
+                    await hub.sync_stay()
             except ValueError as e:
                 errors[key] = str(e)
     await hub.sync_silent()
@@ -318,6 +320,45 @@ async def handle_silent_command(ws: WebSocket, on: bool) -> None:
     reply = silent_reply(on, reason)
     await hub.send(ws, {"type": "reply_delta", "text": reply})
     if not on and (wav := await voice.speak(reply)):
+        await hub.send(ws, {"type": "audio", "text": reply}, wav)
+    await hub.send(ws, {"type": "reply_done", "text": reply})
+
+
+# "Stay on screen" (on) / "turn off stay on screen" (off): the desktop pet's own setting, switched there at once.
+_STAY_PHRASE = r"stay(?:ing)?\W+on(?:\W+the)?\W+screen"
+_STAY_OFF = re.compile(
+    r"^\W*(?:(?:ok(?:ay)?|please|hey|jarvis|ben)\W+)*(?:"
+    rf"(?:turn|switch|put|set)\W+off\W+(?:the\W+)?{_STAY_PHRASE}(?:\W+mode)?|"
+    rf"(?:turn|switch|put|set)\W+(?:the\W+)?{_STAY_PHRASE}(?:\W+mode)?\W+off|(?:the\W+)?{_STAY_PHRASE}(?:\W+mode)?\W+off|"
+    rf"(?:disable|stop|cancel|end|exit|quit)\W+(?:the\W+)?{_STAY_PHRASE}(?:\W+mode)?|"
+    rf"(?:don'?t|do\W+not|stop)\W+{_STAY_PHRASE}|"
+    r"(?:only\W+)?come\W+(?:up\W+)?only\W+when\W+(?:i\W+)?call(?:ed)?(?:\W+you)?|only\W+come\W+when\W+(?:i\W+)?call(?:ed)?(?:\W+you)?|"
+    r"(?:hide|go\W+away)\W+when\W+(?:you(?:'re|\W+are)\W+)?(?:done|finished)"
+    r")(?:\W+(?:now|please))?\W*$", re.IGNORECASE)
+_STAY_ON = re.compile(
+    r"^\W*(?:(?:ok(?:ay)?|please|hey|jarvis|ben)\W+)*(?:"
+    rf"(?:(?:turn|switch|put|set)\W+on\W+|enable\W+|start\W+|activate\W+)?(?:the\W+)?{_STAY_PHRASE}(?:\W+mode)?(?:\W+on)?|"
+    rf"(?:turn|switch|put|set)\W+(?:the\W+)?{_STAY_PHRASE}(?:\W+mode)?\W+on|"
+    r"(?:keep\W+yourself|stay)\W+(?:visible|on(?:\W+the)?\W+screen)|don'?t\W+(?:hide|go\W+away)"
+    r")(?:\W+(?:now|please|all\W+the\W+time))?\W*$", re.IGNORECASE)
+
+
+def stay_command(text: str) -> bool | None:
+    """True for "stay on screen", False for "turn off stay on screen", None when the text is something else."""
+    if _STAY_OFF.match(text):
+        return False
+    if _STAY_ON.match(text):
+        return True
+    return None
+
+
+async def handle_stay_command(ws: WebSocket, on: bool) -> None:
+    """Switch the stored "Stay on screen" setting, tell every pet (and so the tray menu), and answer like a short turn."""
+    prefs.put("stay_on_screen", "on" if on else "off")
+    await hub.sync_stay()
+    reply = ("Okay, I'll stay on screen." if on else "Okay, I'll only come up when you call me or have something to tell you.")
+    await hub.send(ws, {"type": "reply_delta", "text": reply})
+    if not prefs.silent_now() and (wav := await voice.speak(reply)):
         await hub.send(ws, {"type": "audio", "text": reply}, wav)
     await hub.send(ws, {"type": "reply_done", "text": reply})
 
@@ -509,6 +550,10 @@ async def handle_audio(ws: WebSocket, wav: bytes, need_wake: bool, conn: dict) -
         await hub.send(ws, {"type": "transcript", "text": text})
         await handle_silent_command(ws, on)
         return
+    if (on := stay_command(text)) is not None:
+        await hub.send(ws, {"type": "transcript", "text": text})
+        await handle_stay_command(ws, on)
+        return
     if (task := capture_request(text)) is not None:
         await hub.send(ws, {"type": "transcript", "text": text})
         await begin_capture(ws, conn, task)
@@ -527,7 +572,9 @@ async def websocket(ws: WebSocket) -> None:
     hub.clients.add(ws)
     await hub.send(ws, {"type": "hello", "name": config.PET_NAME, "voice": await voice.healthy(),
                         "wake_engine": await voice.wake_engine(), "meeting_quiet": scheduler.meeting_quiet_now(),
-                        "silent": prefs.silent_now()})
+                        "silent": prefs.silent_now(),
+                        # None until it was ever stored, so the pet can hand over the value it kept itself before
+                        "stay": prefs.enabled("stay_on_screen") if prefs.is_set("stay_on_screen") else None})
     flush = asyncio.create_task(hub.flush_outbox())
     turn: asyncio.Task | None = None
     audio_meta: dict = {}
@@ -584,11 +631,16 @@ async def websocket(ws: WebSocket) -> None:
                 typed = str(data["text"]).strip()
                 if (on := silent_command(typed)) is not None:
                     await start(handle_silent_command(ws, on))
+                elif (on := stay_command(typed)) is not None:
+                    await start(handle_stay_command(ws, on))
                 else:
                     await start(handle_text(ws, typed, bool(data.get("speak"))))
             elif kind == "silent_toggle":   # the hotkey or the tray menu
                 prefs.set_silent(not prefs.silent_now() if data.get("on") is None else bool(data["on"]))
                 await hub.sync_silent(announce=True)
+            elif kind == "stay_set":   # the tray menu's "Stay on screen" tick
+                prefs.put("stay_on_screen", "on" if data.get("on") else "off")
+                await hub.sync_stay()
             elif kind == "audio":
                 audio_meta = data
             elif kind == "interrupt":

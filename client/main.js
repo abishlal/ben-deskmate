@@ -301,12 +301,40 @@ function sendDisplays() {
 // After a longer absence the page is reloaded too, which costs nothing and clears any stuck drawing.
 function reassertWindow(reload) {
   if (!win || win.isDestroyed()) return;
+  resetMouseForwarding();
   placeWindow();
   win.setAlwaysOnTop(true, 'screen-saver');
   win.moveTop();
   if (!win.isVisible()) win.showInactive();
   win.webContents.invalidate();
   if (reload) { logLine('reloading the pet page after', reload); load(); }
+}
+
+// ---- mouse forwarding ----
+// The strip is click-through; Electron forwards mouse moves to the page through a Windows low-level mouse hook,
+// and the page switches clicks back on while the pointer is over Ben. Windows silently removes such a hook when
+// the process is slow to answer it (typically right after waking from sleep), and Electron never notices: the
+// page stops seeing the pointer, so Ben can no longer be clicked or dragged until the shell restarts.
+// Switching the forwarding off and on installs a fresh hook.
+let lastPageMouseAt = 0;     // when the page last reported a mouse move (it does on every forwarded move)
+function resetMouseForwarding(why) {
+  if (!win || win.isDestroyed()) return;
+  if (why) logLine('mouse forwarding reset:', why);
+  win.setIgnoreMouseEvents(false);
+  win.setIgnoreMouseEvents(true, { forward: true });
+}
+// Watchdog: the pointer keeps moving over the strip but the page hears nothing, so the hook is gone.
+let lastCursor = null, silentMoves = 0, lastReset = 0;
+function checkMouseForwarding() {
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  const p = screen.getCursorScreenPoint(), b = win.getBounds();
+  const moved = lastCursor && (p.x !== lastCursor.x || p.y !== lastCursor.y);
+  lastCursor = p;
+  const inside = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
+  if (!moved || !inside || Date.now() - lastPageMouseAt < 1500) { silentMoves = 0; return; }
+  if (++silentMoves < 3 || Date.now() - lastReset < 30000) return;
+  silentMoves = 0; lastReset = Date.now();
+  resetMouseForwarding('the page stopped receiving mouse moves');
 }
 
 // The dismiss hotkey: drop a rephrase still on its way (so nothing gets pasted) and tell the page to stop and hide.
@@ -505,7 +533,8 @@ else app.whenReady().then(() => {
     win.moveTop();
   }, 3000);
 
-  ipcMain.on('pet:ignore-mouse', (_e, ignore) => win.setIgnoreMouseEvents(ignore, { forward: true }));
+  ipcMain.on('pet:ignore-mouse', (_e, ignore) => { lastPageMouseAt = Date.now(); win.setIgnoreMouseEvents(ignore, { forward: true }); });
+  setInterval(checkMouseForwarding, 400);
   ipcMain.on('pet:lift', (_e, on, displayId) => {
     if (screen.getAllDisplays().some((d) => d.id === displayId)) homeId = displayId;
     lifted = !!on; placeWindow();

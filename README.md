@@ -81,13 +81,52 @@ The pet stays out of sight. It comes up when you call it or when it has a remind
 | Meetings | While a meeting on your Outlook calendar is in progress (shown as busy), it also goes quiet, and holds back everything except reminders until the meeting ends. "Stop going quiet in meetings" turns this off. |
 | Status | Tray menu → Status and usage, or http://127.0.0.1:47821/status: microphone, wake word, desktop bridge and each app's last call, what is being held back, and turns and cost per day. |
 | Keep it visible | Say "Hey Jarvis, stay on screen" ("turn off stay on screen" or "only come when I call you" to switch it off), or use the Stay on screen switch on the settings page or in the tray menu. It is a saved setting, so it is kept across restarts, and all three stay in step. While on, it wanders along the taskbar; while off, it comes up only when called or when it has something to say, and hides again when done. |
-| How it shows up | Called up, it rises from behind the taskbar and waves. A task about to be due or a meeting coming up: a rope drops halfway down the screen, it slides to the end and jumps down onto the taskbar. The morning briefing and meeting follow-ups: it floats down under an umbrella. In silent mode, a call or a meeting it only peeks in from the right edge of the screen, then walks in. To leave it walks off the edge (after peeking or the rope), hops down behind the taskbar (after the rope), or waves and sinks behind the taskbar. |
-| Reminder poses | Water: it holds out a glass of water; click it (or say "done") and it has a sip too. Break: it stretches. Meetings and reminders: it taps its watch and points at you. Tasks due: it ticks off a checklist. Focus time over, or a task marked done: a thumbs up. |
-| Little things | Its eyes follow the mouse pointer when it is near. With Stay on screen on it wanders, sits on the taskbar swinging its feet, codes on its laptop or yawns; click it while it is busy with that and it jumps. From 8 pm to 6 am it is sleepy and keeps a mug of something warm in its hand, even while talking. |
+| Animations | How it comes and goes, what it holds for each reminder, and what it does on its own: see [Animations](#animations) below. |
 | Pick it up | Drag it to carry it anywhere, including onto another monitor; let go to drop it, or flick to throw it. It bounces off screen edges and lands on the taskbar of the screen it is over (dizzy after a hard landing), and stays on that screen. A plain click still calls it. |
 | Wake word off | Tray menu → Listen for the wake word. The microphone is then only used after the hotkey or a click. |
 | Mute voice | Tray menu → Mute voice. Replies still appear in the bubble. |
 | Start with Windows | Tray menu → Start with Windows. The containers restart on their own once Docker Desktop is running. |
+
+### Animations
+
+Ben is drawn in 3D in the pet window, so every move is animated rather than a fixed picture.
+
+**How he comes up and leaves**
+
+| When | Coming up | Leaving |
+|---|---|---|
+| You call him (wake word, hotkey, click) | Rises from behind the taskbar and waves. | Waves and sinks behind the taskbar. |
+| A task about to be due, a meeting coming up | A rope drops halfway down the screen; he slides down it, swings, jumps off and lands on the taskbar with a squash. | Walks off the nearer edge of the screen, or hops down behind the taskbar. |
+| Morning briefing, meeting follow-up | Floats down under a red umbrella. | Waves and sinks behind the taskbar. |
+| Silent mode, a call, a meeting | Peeks in from the right edge of the screen, then walks in. No speech bubble while he is half off the screen. | Walks back off the right edge. |
+
+If you call him back while he is walking off, he turns round and comes back.
+
+**Reminder poses**
+
+He holds the pose while the message is up.
+
+| Reminder | Pose |
+|---|---|
+| Water | Holds out a glass of water. Click him, or say "done" / "I drank it" within two minutes, and he takes a sip too, then cheers. |
+| Stretch break | Stretches, arms up. |
+| Meeting, reminder | Taps the gold watch on his wrist and points at you. |
+| Task due | Ticks items off a checklist with a pencil. |
+| Focus time over, a task marked done | Thumbs up and a smile. |
+
+**On his own**
+
+| What | When |
+|---|---|
+| Eyes follow the mouse | Whenever the pointer is near him. |
+| Wandering, sitting on the taskbar swinging his feet, coding on a laptop, yawning | With Stay on screen on and nothing else going on. |
+| Startle | Click him while he is sitting, napping, coding or walking: he jumps ("You scared me!"), then listens. |
+| Sleepy with a mug | From 8 pm to 6 am: heavier eyelids, more yawns and naps, and a steaming mug in his hand, even while talking. |
+| Held, thrown, dizzy | Pick him up, throw him or drop him from high up (see Pick it up above). |
+
+**See them all**
+
+Open http://127.0.0.1:47821/pet/ben3d-preview.html in a browser. It has a button for every pose (rope climbing, umbrella floating, peeking, walking, water and sip, stretch, watch, checklist, thumbs up, startle, sit, yawn, sleepy and the rest), and you can drag to turn him around. The entrances and exits themselves only play in the pet window, when the matching reminder comes up.
 
 ### How the wake word works
 
